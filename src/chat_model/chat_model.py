@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os, subprocess
-from typing import TypedDict, Any, TYPE_CHECKING, Callable
+from typing import Any, TYPE_CHECKING, Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from llama_index.llms.ollama import Ollama
@@ -28,13 +28,7 @@ if TYPE_CHECKING:
     
 
 
-class Prompt(TypedDict):
-    role: str
-    content: str
     
-
-
-
 class ModelParams(BaseModel):
     temperature: float
     context_window: int

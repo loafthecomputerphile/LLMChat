@@ -129,3 +129,8 @@ def test_presentation_extractor() -> None:
     
     assert EXTRACTION_ERROR_FLAG == ExtractionErrors.SUCCESS
     assert strip_all_ws(target) == strip_all_ws(test_data)
+    
+    
+    
+def test_extraction_router() -> None:
+    

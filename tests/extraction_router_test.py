@@ -4,8 +4,7 @@ import re
 
 import pytest
 
-from src.chat_model.chat_model import CHat
+from src.extractors import *
 
 if TYPE_CHECKING:
-    from langchain_core.document
-    
+    from langchain_core.documents import Document
