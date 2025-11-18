@@ -4,7 +4,6 @@ from .extraction_utils import bytes_to_megabytes, get_mimetype, set_pandoc_env
 from ..flags import ExtractionErrors, EXTRACTION_ERROR_FLAG
 
 from llama_index.core import Document
-from llama_index.core.node_parser import CodeSplitter
 
 
 __all__ = [
@@ -13,14 +12,10 @@ __all__ = [
 ]
 
 set_pandoc_env()
-
-
-    
+ 
 
 ocr_model = None
 FILE_SIZE_LIMIT: int = 25
-
-
 
 
 def excel_extractor(file_path: str) -> list[Document] | str:
