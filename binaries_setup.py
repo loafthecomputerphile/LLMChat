@@ -10,6 +10,7 @@ from pathlib import Path
 ARCHIVE_TYPES: tuple[str, ...] = ()
 ROOT: Path = Path(__file__).parent
 
+
 def safe_extract_archive(archive_path: str, dest_dir: str) -> None:
     archive_path: Path = Path(archive_path)
     dest_dir: Path = Path(dest_dir)
@@ -49,6 +50,7 @@ def safe_extract_archive(archive_path: str, dest_dir: str) -> None:
             shutil.move(str(item), dest_dir)
 
     shutil.rmtree(temp_dir)
+
 
 def download_and_install(url: str, install_dir: str, backup_old: bool = True) -> None:
     suffix: str = Path(url).suffix 
@@ -122,17 +124,26 @@ def load_config() -> dict[str, Any]:
     with open(ROOT / "binaries_setup.toml", "rb") as file:
         return tomli.load(file)
     
+
 def make_script(path: str, content: str) -> None:
     with open(path, "w") as file:
         file.write(content)
+
 
 def run_cmd(args: list[str]) -> None:
     subprocess.run(args, check=True)
 
 
+def install_model(script_path: str, model_url: str, name: str) -> None:
+    run_cmd([script_path, "pull", model_url])
+    run_cmd([script_path, "cp", model_url, name])
+    run_cmd([script_path, "rm", model_url])
+
+
 def main() -> None:
     
     key: str 
+    script: Path
     pandoc_url: str
     ollama_url: str
     
@@ -225,18 +236,20 @@ def main() -> None:
     else:
         script = binary_path / "ollama" / "ollama_portable.sh"
         make_script(script, configs["Scripts"]["ollama-unix"])
-        
+    
+    script_str: str = str(script)
     if operating_system == platform.system().lower():
         model_sec: dict[str, str] = configs["Models"]
+        
+        if platform.system().lower() in ("darwin", "linux"):
+            run_cmd(["chmod", "+x", script_str])
+            
         print("\nDownloading Embedding Model:")
-        run_cmd([str(script), "pull", model_sec["embedding-pull"]])
-        run_cmd([str(script), "cp", model_sec["embedding-pull"], model_sec["embedding-name"]])
-        run_cmd([str(script), "rm", model_sec["embedding-pull"]])
+        install_model(script_str, model_sec["embedding-pull"], model_sec["embedding-name"])
         print("Download Finished\n")
+        
         print("Downloading LLM:")
-        run_cmd([str(script), "pull", model_sec["llm-pull"]])
-        run_cmd([str(script), "cp", model_sec["llm-pull"], model_sec["llm-name"]])
-        run_cmd([str(script), "rm", model_sec["llm-pull"]])
+        install_model(script_str, model_sec["llm-pull"], model_sec["llm-name"])
         print("Download Finished\n")
         
 

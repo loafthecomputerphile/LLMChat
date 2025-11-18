@@ -7,4 +7,4 @@ import pytest
 from src.extractors import *
 
 if TYPE_CHECKING:
-    from langchain_core.documents import Document
+    from llama_index.core import Document

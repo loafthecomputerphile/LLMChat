@@ -15,5 +15,5 @@ def bytes_to_megabytes(bytes: int) -> int:
 
 
 def set_pandoc_env() -> None:
-    os.environ.setdefault('PYPANDOC_PANDOC', PANDOC_EXE)
+    os.environ.setdefault('PYPANDOC_PANDOC', str(PANDOC_EXE))
     

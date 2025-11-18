@@ -7,5 +7,5 @@ import pytest
 from src.chat_model.chat_model import CHat
 
 if TYPE_CHECKING:
-    from langchain_core.document
+    from llama_index.core import Document
     
