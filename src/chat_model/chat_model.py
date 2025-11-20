@@ -1,23 +1,20 @@
 from __future__ import annotations
-import os, subprocess
-from typing import Any, TYPE_CHECKING, Callable
+import os, subprocess, asyncio
+from typing import Any, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
 
 from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.ollama import OllamaEmbedding
-from llama_index.llms.ollama.base import ChatMessage
-from llama_index.core.agent.workflow import ReActAgent
+from llama_index.core.agent.workflow import FunctionAgent
 from llama_index.core.memory import Memory, VectorMemory, SimpleComposableMemory
-from llama_index.core.workflow import Context
-from llama_index.core.vector_stores.simple import SimpleVectorStore
 from llama_index.core.workflow.handler import WorkflowHandler
 from llama_index.core import VectorStoreIndex
 from llama_index.core.tools import QueryEngineTool, FunctionTool
 from pydantic import BaseModel
 
-from ..paths import OLLAMA_SERVE_CMD
+from ..paths import PORTABLE_OLLAMA
 from .. import variables
-from ..extractors.extraction_router import ExtractionRouter, SplitExtractor
+from ..extractors.extraction_router import ExtractionRouter
 
 if TYPE_CHECKING:
     from llama_index.core.indices.base import BaseIndex
@@ -46,6 +43,8 @@ Use it only when the question involves content that may exist in those documents
 Skip this tool for open-ended, speculative, or conversational prompts.
 """
 
+EMBEDDING_DIMENSIONS: int = 384
+
 
 def create_rag_tool(model: Ollama, embeddimg_model: BaseEmbedding, description: str, top_k: int = 4) -> tuple[QueryEngineTool, BaseIndex]:
     index: VectorStoreIndex = VectorStoreIndex([], embed_model=embeddimg_model)
@@ -66,18 +65,26 @@ def make_cutsom_memory(
     vector_memory: VectorMemory | None = None
     
     if use_vector_store:
-        vector_store: SimpleVectorStore = SimpleVectorStore()
         vector_memory: VectorMemory = VectorMemory.from_defaults(
-            vector_store=vector_store,
+            vector_store=None,
             embed_model=embedding_model,
-            token_limit=vector_tokens,
-            top_k=top_limit
+            index_kwargs={
+                "similarity_top_k": top_limit,
+                "max_tokens": vector_tokens,  
+            }
         )
         
     return SimpleComposableMemory(
         primary_memory=memory,
         secondary_memory_sources=vector_memory if vector_memory is None else [vector_memory]
     )
+
+
+def prepend_path(path_to_add: str) -> dict:
+    """Return a copy of os.environ with path_to_add placed at the front of PATH."""
+    env = os.environ.copy()
+    env["PATH"] = path_to_add + os.pathsep + env["PATH"]
+    return env
 
 
 class ChatModel:
@@ -88,7 +95,7 @@ class ChatModel:
         self.extraction_router: ExtractionRouter = extractor
         self.embedding: BaseEmbedding = OllamaEmbedding(variables.EMBEDDING_MODEL_NAME, base_url=variables.SERVER_URL)
         self.error_flag: Exception | None = None
-        self.agent: ReActAgent  | None = None
+        self.agent: FunctionAgent  | None = None
         self.model: Ollama | None = None
         self.system_prompt: str | None = None
         self.llm_name: str | None = None
@@ -97,6 +104,8 @@ class ChatModel:
         self.tools: list[FunctionTool] = []
         self.memory: Memory | None = None
         self.vector_store: BaseIndex | None = None
+        
+        os.environ.setdefault('OLLAMA_HOST', str(variables.SERVER_URL))
         
         if tools:
             for tool in tools: self.add_tool(tool)
@@ -151,11 +160,10 @@ class ChatModel:
             startup_info.wShowWindow = subprocess.SW_HIDE
             
             self.ollama_server = subprocess.Popen(
-                OLLAMA_SERVE_CMD, shell=True,
+                [str(PORTABLE_OLLAMA), "serve"], shell=True,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 startupinfo=startup_info
             )
-            
             self.ollama_server.wait(timeout)
             
         except subprocess.TimeoutExpired as e:
@@ -171,7 +179,7 @@ class ChatModel:
         self.run_ollama_server()
         
         self.model = Ollama(
-            model_name=self.llm_name, temperature=self.llm_params.temperature,
+            model=self.llm_name, temperature=self.llm_params.temperature,
             context_window=self.llm_params.context_window, base_url=variables.SERVER_URL
         )
         
@@ -182,7 +190,7 @@ class ChatModel:
         
         self.add_tool(query_tool)
         self._initialize_memory()
-        self.agent = ReActAgent(
+        self.agent = FunctionAgent(
             llm=self.model, request_timeout=360.0,
             tools=self.tools, system_prompt=self.system_prompt
         )
@@ -194,5 +202,8 @@ class ChatModel:
             top_limit=self.llm_params.top_k_memory
         )
         
-    def prompt(self, prompt_text: str) -> WorkflowHandler:
-        return self.agent.run(prompt_text, memory=self.memory)
+    async def aprompt(self, prompt_text: str) -> WorkflowHandler:
+        return await self.agent.run(prompt_text, memory=self.memory)
+    
+    def prompt(self, prompt_text: str) -> str:
+        return str(asyncio.run(self.aprompt(prompt_text)))

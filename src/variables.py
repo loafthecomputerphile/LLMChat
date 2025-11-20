@@ -1,4 +1,4 @@
 
-SERVER_URL: str = "http://0.0.0.0:11434"
-EMBEDDING_MODEL_NAME: str = "embeddinggemma-300m-GGUF:Q6_K"
-BASE_MODEL: str = "hf.co/unsloth/Qwen3-VL-2B-Instruct-GGUF:Q5_K_M"
+SERVER_URL: str = "http://localhost:11500"
+EMBEDDING_MODEL_NAME: str = "nomic-embed-text:latest"
+BASE_MODEL: str = "Qwen3-ABL-1.7b:latest"

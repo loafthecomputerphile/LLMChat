@@ -12,7 +12,7 @@ if not exist "%OLLAMA_MODELS%" mkdir "%OLLAMA_MODELS%"
 if not exist "%OLLAMA_HOME%" mkdir "%OLLAMA_HOME%"
 set OLLAMA_HOST=127.0.0.1:%PORT%
 if "%1"=="serve" (
-    "%ScriptDir%\\ollama.exe" serve --port %PORT%
+    "%ScriptDir%\\ollama.exe" serve
     exit /b
 )
 %ScriptDir%\\ollama.exe %ARGS%
@@ -33,7 +33,7 @@ export OLLAMA_HOST="127.0.0.1:$PORT"
 [ -d "$OLLAMA_HOME" ] || mkdir -p "$OLLAMA_HOME"
 =
 if [ "$1" = "serve" ]; then
-    "$SCRIPT_DIR/bin/ollama" serve --port "$PORT"
+    "$SCRIPT_DIR/bin/ollama" serve
     exit 0
 fi
 
@@ -55,7 +55,7 @@ export OLLAMA_HOST="127.0.0.1:$PORT"
 [ -d "$OLLAMA_HOME" ] || mkdir -p "$OLLAMA_HOME"
 =
 if [ "$1" = "serve" ]; then
-    "$SCRIPT_DIR/ollama" serve --port "$PORT"
+    "$SCRIPT_DIR/ollama" serve
     exit 0
 fi
 
@@ -72,8 +72,8 @@ archive-types = [".zip", ".tgz", ".tar.gz"]
 
 [Models]
 
-embedding-name = "embeddinggemma-300m"
-embedding-pull = "hf.co/second-state/embeddinggemma-300m-GGUF:Q6_K"
+embedding-name = ""
+embedding-pull = "nomic-embed-text"
 
-llm-name = "Qwen3-VL-2B-Instruct"
-llm-pull = "hf.co/unsloth/Qwen3-VL-2B-Instruct-GGUF:Q5_K_M"
+llm-name = "Qwen3-ABL-1.7b"
+llm-pull = "huihui_ai/qwen3-abliterated:1.7b-v2-q4_K_M"
