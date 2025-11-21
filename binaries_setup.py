@@ -201,11 +201,14 @@ def main() -> None:
     ollama_portable: Path = binary_path / "ollama" / "ollama_portable"
     
     if operating_system == "windows":
-        prepend_path(binary_path / "ollama" )
+        ext = ".bat"
+        make_script(ollama_portable.with_suffix(ext), scripts["ollama-windows"])
     elif operating_system == "darwin":
-        prepend_path(binary_path / "ollama" )
+        ext = ".sh"
+        make_script(ollama_portable.with_suffix(ext), scripts["ollama-macOS"])
     elif operating_system == "linux":
-        prepend_path(binary_path / "ollama" / "bin" )
+        ext = ".sh"
+        make_script(ollama_portable.with_suffix(ext), scripts["ollama-unix"])
     
 
     if not os.path.exists(binary_path / "ollama"):

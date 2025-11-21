@@ -1,6 +1,9 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 import re
+import warnings
+
+warnings.filterwarnings("ignore")
 
 import pytest
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -19,9 +22,9 @@ def strip_all_ws(s: str) -> str:
 
 
 
-def test_chat_model() -> None:
+def test_chat_model(printer) -> None:
     splitter: LangchainNodeParser = LangchainNodeParser(
-        RecursiveCharacterTextSplitter(chunk_size=2048, chunk_overlap=100)
+        RecursiveCharacterTextSplitter(chunk_size=1024, chunk_overlap=100)
     )
 
     router: ExtractionRouter = ExtractionRouter()
@@ -30,7 +33,7 @@ def test_chat_model() -> None:
 
     model: ChatModel = ChatModel(router)  
     params: ModelParams = ModelParams(
-        temperature=0.7, context_window=48000, rag_top_k=4, 
+        temperature=0.7, context_window=32000, rag_top_k=4, 
         history_tokens=5120, long_term_memory=True, long_term_tokens=5120, 
         top_k_memory=4
     )
@@ -39,6 +42,6 @@ def test_chat_model() -> None:
     model.load_model(variables.BASE_MODEL)
     
     result: str = model.prompt("/no_think what is 2+2")
-    print(result)
+    printer(result)
     
     

@@ -169,7 +169,8 @@ venv.bak/
 
 #assets and binaries
 data/bin/*
-
+data/ollama_data/models/*
+data/ollama_data/ollama_home/*
 
 # mypy
 .mypy_cache/

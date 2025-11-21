@@ -3,11 +3,12 @@ ollama-windows = """
 @echo off
 title Ollama Portable
 SET "ScriptDir=%~dp0"
+FOR %%A IN ("%~dp0..\\..") DO SET "ParentDir=%%~fA"
 set "ARGS=%*"
 set OLLAMA_ORIGINS=*
 set "PORT=11500"
-set "OLLAMA_MODELS=%ScriptDir%\\models"
-set "OLLAMA_HOME=%ScriptDir%\\ollama_home"
+set "OLLAMA_MODELS=%ParentDir%\\ollama_data\\models"
+set "OLLAMA_HOME=%ParentDir%\\ollama_data\\ollama_home"
 if not exist "%OLLAMA_MODELS%" mkdir "%OLLAMA_MODELS%"
 if not exist "%OLLAMA_HOME%" mkdir "%OLLAMA_HOME%"
 set OLLAMA_HOST=127.0.0.1:%PORT%
@@ -20,12 +21,13 @@ if "%1"=="serve" (
 
 ollama-unix = """
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PARENT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 ARGS="$@"
 
 export OLLAMA_ORIGINS="*"
 PORT=11500
-export OLLAMA_MODELS="$SCRIPT_DIR/models"
-export OLLAMA_HOME="$SCRIPT_DIR/ollama_home"
+export OLLAMA_MODELS="$PARENT_DIR/ollama_data/models"
+export OLLAMA_HOME="$PARENT_DIR/ollama_data/ollama_home"
 export OLLAMA_HOST="127.0.0.1:$PORT"
 
 # Create folders if missing
@@ -42,12 +44,13 @@ fi
 
 ollama-macOS = """
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PARENT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 ARGS="$@"
 
 export OLLAMA_ORIGINS="*"
 PORT=11500
-export OLLAMA_MODELS="$SCRIPT_DIR/models"
-export OLLAMA_HOME="$SCRIPT_DIR/ollama_home"
+export OLLAMA_MODELS="$PARENT_DIR/ollama_data/models"
+export OLLAMA_HOME="$PARENT_DIR/ollama_data/ollama_home"
 export OLLAMA_HOST="127.0.0.1:$PORT"
 
 # Create folders if missing

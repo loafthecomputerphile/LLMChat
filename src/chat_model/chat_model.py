@@ -12,7 +12,7 @@ from llama_index.core import VectorStoreIndex
 from llama_index.core.tools import QueryEngineTool, FunctionTool
 from pydantic import BaseModel
 
-from ..paths import PORTABLE_OLLAMA
+from ..paths import PORTABLE_OLLAMA, OLLAMA_HOME_FOLDER, MODELS_FOLDER
 from .. import variables
 from ..extractors.extraction_router import ExtractionRouter
 
@@ -106,6 +106,8 @@ class ChatModel:
         self.vector_store: BaseIndex | None = None
         
         os.environ.setdefault('OLLAMA_HOST', str(variables.SERVER_URL))
+        os.environ.setdefault('OLLAMA_MODELS', str(MODELS_FOLDER))
+        os.environ.setdefault('OLLAMA_HOME', str(OLLAMA_HOME_FOLDER))
         
         if tools:
             for tool in tools: self.add_tool(tool)

@@ -20,9 +20,8 @@ if platform.system().lower() == "linux":
     PORTABLE_OLLAMA_EXE = PORTABLE_OLLAMA_EXE / "bin"
 
 
-MODELS_FOLDER: Path = DATA_FOLDER / "models"
-EMBEDDINGS_FOLDER: Path = MODELS_FOLDER / "embeddings"
-LLM_FOLDER: Path = MODELS_FOLDER / "llm"
+MODELS_FOLDER: Path = DATA_FOLDER / "ollama_data" / "models"
+OLLAMA_HOME_FOLDER: Path = DATA_FOLDER / "ollama_data" / "ollama_home"
 
 
 
