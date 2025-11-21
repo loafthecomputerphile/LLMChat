@@ -11,6 +11,12 @@ ARCHIVE_TYPES: tuple[str, ...] = ()
 ROOT: Path = Path(__file__).parent
 
 
+def prepend_path(path_to_add: str) -> dict:
+    """Return a copy of os.environ with path_to_add placed at the front of PATH."""
+    env = os.environ.copy()
+    env["PATH"] = path_to_add + os.pathsep + env["PATH"]
+    return env
+
 def safe_extract_archive(archive_path: str, dest_dir: str) -> None:
     archive_path: Path = Path(archive_path)
     dest_dir: Path = Path(dest_dir)
@@ -134,16 +140,25 @@ def run_cmd(args: list[str]) -> None:
     subprocess.run(args, check=True)
 
 
-def install_model(script_path: str, model_url: str, name: str) -> None:
-    run_cmd([script_path, "pull", model_url])
-    run_cmd([script_path, "cp", model_url, name])
-    run_cmd([script_path, "rm", model_url])
+def install_model(script_path: str, model_url: str, name: str, is_unix: bool = False) -> None:
+    if not is_unix:
+        run_cmd([script_path, "pull", model_url])
+        run_cmd([script_path, "cp", model_url, name])
+        run_cmd([script_path, "rm", model_url])
+        return
+        
+    run_cmd(["bash", script_path, "pull", model_url])
+    run_cmd(["bash", script_path, "cp", model_url, name])
+    run_cmd(["bash", script_path, "rm", model_url])
+    
+    
+def get_first_match(key: str, data: list[str])-> str:
+    return next(filter(lambda x: key in x, data), None)
 
 
 def main() -> None:
     
-    key: str 
-    script: Path
+    key: str
     pandoc_url: str
     ollama_url: str
     
@@ -154,20 +169,12 @@ def main() -> None:
     )
 
     parser.add_argument(
-        "--os",
-        required=True,
+        "--os", required=True,
         choices=["linux", "darwin", "windows"]
     )
 
-    parser.add_argument(
-        "--pandoc-version",
-        help="version of pandoc to install",
-    )
-
-    parser.add_argument(
-        "--ollama-version",
-        help="version of ollama to install",
-    )
+    parser.add_argument("--pandoc-version", help="version of pandoc to install")
+    parser.add_argument("--ollama-version", help="version of ollama to install")
 
     args: argparse.Namespace = parser.parse_args()
     
@@ -175,6 +182,7 @@ def main() -> None:
     configs: dict[str, Any] = load_config()
     pandoc_owner: str = configs["Url-Vars"]["pandoc-owner"]
     ollama_owner: str = configs["Url-Vars"]["ollama-owner"]
+    scripts: dict[str, Any] = configs["Scripts"]
     ARCHIVE_TYPES = tuple(configs["Url-Vars"]["archive-types"])
     
     arch: str = platform.machine().lower()
@@ -190,66 +198,77 @@ def main() -> None:
     )
     
     binary_path: Path = ROOT / "data" / "bin"
+    ollama_portable: Path = binary_path / "ollama" / "ollama_portable"
+    
+    if operating_system == "windows":
+        ext = ".bat"
+        make_script(ollama_portable.with_suffix(ext), scripts["ollama-windows"])
+    elif operating_system == "darwin":
+        ext = ".sh"
+        make_script(ollama_portable.with_suffix(ext), scripts["ollama-macOS"])
+    elif operating_system == "linux":
+        ext = ".sh"
+        make_script(ollama_portable.with_suffix(ext), scripts["ollama-unix"])
+    
 
     if not os.path.exists(binary_path / "ollama"):
         os.makedirs(binary_path / "ollama")
+    else:
+        try:
+            run_cmd([str(ollama_portable), "stop"])
+        except Exception as e:
+            pass
     if not os.path.exists(binary_path / "pandoc"):
         os.makedirs(binary_path / "pandoc")
 
     if operating_system == "windows":
         if arch in ("amd64", "arm64"):
             key = f"{operating_system}-x86_64"
-            pandoc_url = next(filter(lambda x: key in x, pandoc_urls), None)
+            pandoc_url = get_first_match(key, pandoc_urls)
             key = f"{operating_system}-{arch}."
-            ollama_url = next(filter(lambda x: key in x, ollama_urls), None)
-            
-        make_script(
-            binary_path / "ollama" / "ollama_portable.bat", 
-            configs["Scripts"]["ollama-windows"]
-        )
+            ollama_url = get_first_match(key, ollama_urls)
     elif operating_system == "darwin":
         key = f"{operating_system}."
-        ollama_url = next(filter(lambda x: key in x, ollama_urls), None)
+        ollama_url = get_first_match(key, ollama_urls)
         if arch in ("amd64", "arm64"):
             key = f"{'x86_64'if arch == 'amd64' else arch}-macOS"
-            pandoc_url = next(filter(lambda x: key in x, pandoc_urls), None)
-
-        make_script(
-            binary_path / "ollama" / "ollama_portable.sh", 
-            configs["Scripts"]["ollama-unix"]
-        )
+            pandoc_url = get_first_match(key, pandoc_urls)
     elif operating_system == "linux":
         key = f"{operating_system}-{arch}."
-        pandoc_url = next(filter(lambda x: key in x, pandoc_urls), None)
-        ollama_url = next(filter(lambda x: key in x, ollama_urls), None)
+        pandoc_url = get_first_match(key, pandoc_urls)
+        ollama_url = get_first_match(key, ollama_urls)
         #if arch in "arm64":
         
     download_and_install(pandoc_url, binary_path / "pandoc")  
-    download_and_install(ollama_url, binary_path / "ollama")
+    download_and_install(ollama_url, binary_path / "ollama") 
     
-    if operating_system == "windows":
-        script = binary_path / "ollama" / "ollama_portable.bat"
-        make_script(script, configs["Scripts"]["ollama-windows"])
-    elif operating_system == "darwin":
-        script = binary_path / "ollama" / "ollama_portable.sh"
-        make_script(script, configs["Scripts"]["ollama-macOS"])
-    else:
-        script = binary_path / "ollama" / "ollama_portable.sh"
-        make_script(script, configs["Scripts"]["ollama-unix"])
-    
-    script_str: str = str(script)
-    if operating_system == platform.system().lower():
-        model_sec: dict[str, str] = configs["Models"]
+    ext: str
         
-        if platform.system().lower() in ("darwin", "linux"):
-            run_cmd(["chmod", "+x", script_str])
+    if operating_system == "windows":
+        ext = ".bat"
+        make_script(ollama_portable.with_suffix(ext), scripts["ollama-windows"])
+    elif operating_system == "darwin":
+        ext = ".sh"
+        make_script(ollama_portable.with_suffix(ext), scripts["ollama-macOS"])
+    elif operating_system == "linux":
+        ext = ".sh"
+        make_script(ollama_portable.with_suffix(ext), scripts["ollama-unix"])
+        #if arch in "arm64":
+
+    current_os: str = platform.system().lower()
+    if operating_system == current_os:
+        model_sec: dict[str, str] = configs["Models"]
+        is_unix_like: bool = current_os in ("darwin", "linux")
+        script_path: str = str(ollama_portable.with_suffix(ext))
+        if is_unix_like:            
+            run_cmd(["chmod", "+x", script_path])
             
         print("\nDownloading Embedding Model:")
-        install_model(script_str, model_sec["embedding-pull"], model_sec["embedding-name"])
+        install_model(script_path, model_sec["embedding-pull"], model_sec["embedding-name"], is_unix_like)
         print("Download Finished\n")
         
         print("Downloading LLM:")
-        install_model(script_str, model_sec["llm-pull"], model_sec["llm-name"])
+        install_model(script_path, model_sec["llm-pull"], model_sec["llm-name"], is_unix_like)
         print("Download Finished\n")
         
 
