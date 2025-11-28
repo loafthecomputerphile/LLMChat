@@ -75,8 +75,8 @@ archive-types = [".zip", ".tgz", ".tar.gz"]
 
 [Models]
 
-embedding-name = ""
-embedding-pull = "nomic-embed-text"
+embedding-name = "embeddinggemma:Q4"
+embedding-pull = "embeddinggemma:300m-qat-q4_0"
 
 llm-name = "Qwen3-ABL-1.7b"
 llm-pull = "huihui_ai/qwen3-abliterated:1.7b-v2-q4_K_M"

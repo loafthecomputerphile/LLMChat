@@ -9,11 +9,13 @@ DATA_FOLDER: Path = ROOT / "data"
 BINARIES_FOLDER: Path = DATA_FOLDER / "bin"
 PANDOC_EXE: Path = BINARIES_FOLDER / "pandoc" / "pandoc.exe"
 PORTABLE_OLLAMA: Path = BINARIES_FOLDER / "ollama" / "ollama_portable.bat"
+PORTABLE_OLLAMA_EM: Path = BINARIES_FOLDER / "ollama" / "ollama_portable_em.bat"
 PORTABLE_OLLAMA_EXE: Path = BINARIES_FOLDER / "ollama"
 
 
 if platform.system().lower() in ("linux", "darwin"):
     PORTABLE_OLLAMA = BINARIES_FOLDER / "ollama" / "ollama_portable.sh"
+    PORTABLE_OLLAMA_EM = BINARIES_FOLDER / "ollama" / "ollama_portable_em.sh"
     PANDOC_EXE = BINARIES_FOLDER / "pandoc" / "bin" / "pandoc"
     
 if platform.system().lower() == "linux":

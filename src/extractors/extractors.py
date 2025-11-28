@@ -60,7 +60,7 @@ def plain_extractor(file_path: str) -> list[Document] | str:
         return ExtractionErrors.FILE_SIZE_LIMIT
     
     text: str = ""
-    with open(file_path, "r") as file:
+    with open(file_path, "r", encoding="utf8") as file:
         text: str = file.read()
     
     return [

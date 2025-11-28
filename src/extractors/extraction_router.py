@@ -18,26 +18,29 @@ __all__ = ["Extractor", "ExtractionRouter", "SplitExtractor"]
 
 Extractor: TypeAlias = Callable[[str], list["Document"]]
 
-def node_to_document(nodes: list[BaseNode]) -> list[Document]:
-    return [
-        Document(id_=node.id_, text=node.get_content(), metadata=dict(node.metadata)) 
-        for node in nodes
-    ]
-    
+def nodes_to_documents(nodes: list[BaseNode]) -> list[Document]:
+    result: list[Document] = []
+    for node in nodes:
+        result.append(
+            Document(
+                id_=node.id_, 
+                text=node.get_content(), 
+                metadata=dict(node.metadata)
+            )
+        )
+    return result
 
 
 class SplitExtractor:
     
     __slots__ = ("extractor", "splitter")
     
-    def __init__(self, extractor: Extractor, splitter: TextSplitter | None = None) -> None:
+    def __init__(self, extractor: Extractor, splitter: TextSplitter) -> None:
         self.extractor: Extractor = extractor
-        self.splitter: TextSplitter | None = splitter
+        self.splitter: TextSplitter = splitter
     
-    def run(self, path: str) -> list[Document] | list[BaseNode]:
-        if not self.splitter:
-            return self.extractor(path)
-        return node_to_document(self.splitter.get_nodes_from_documents(self.extractor(path)))
+    def run(self, path: str) -> list[BaseNode]:
+        return self.splitter.get_nodes_from_documents(self.extractor(path))
 
 
 class ExtractionRouter:
@@ -60,12 +63,11 @@ class ExtractionRouter:
         for mime_type in mime_types:
             self.file_map[mime_type] = extractor_name
             
-    def extract(self, file_path: str) -> list[Document] | str:
+    def extract(self, file_path: str) -> list[BaseNode] | str:
         try:
             if "." not in file_path:
                 return ExtractionErrors.FILE_TYPE_NOT_RECOGNIZED
             file_type: str = file_path.split(".")[-1]
-            print(self.extractors[self.file_map[file_type]])
             if file_type not in self.file_map:
                 return ExtractionErrors.FILE_TYPE_NOT_RECOGNIZED
             return self.extractors[self.file_map[file_type]].run(file_path)

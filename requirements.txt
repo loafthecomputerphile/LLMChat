@@ -15,3 +15,7 @@ pathlib
 pydantic
 tqdm
 tomli
+llama-index-vector-stores-faiss
+faiss-cpu 
+pytest-asyncio
+nest_asyncio
