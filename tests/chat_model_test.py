@@ -29,7 +29,7 @@ def strip_all_ws(s: str) -> str:
 
 def make_model() -> ChatModel:
     splitter: LangchainNodeParser = LangchainNodeParser(
-        RecursiveCharacterTextSplitter(chunk_size=128, chunk_overlap=32)
+        RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=64)
     )
 
     router: ExtractionRouter = ExtractionRouter()
@@ -56,8 +56,9 @@ chat_model: ChatModel = make_model()
 def test_chat_model(printer) -> None:
     global chat_model
     
-    result: str = str(chat_model.prompt("/no_think what is 2+2"))
+    result: str = str(chat_model.prompt(" what is 2+2"))
     printer(result)
+    chat_model.prompt("my name is Jimbob")
     
 
 def test_rag(printer) -> None:
@@ -67,18 +68,14 @@ def test_rag(printer) -> None:
         str(TEST_FILE_FOLDER / "rag_test.txt")
     ])
     
-    result: str =  str( chat_model.prompt("/no_think from the docs how old is john"))
-    printer(result)
-    
     chat_model.add_documents([
         str(TEST_FILE_FOLDER / "rag_test_2.txt")
     ])
     
     result: str = str( chat_model.prompt("""
-        /no_think
-        Answer these questions:
-            - from the document about john how old is he in the beginning of the story and then at the end of the story
-            - from the document about mathew what rattled the door
+    Answer these questions:
+        1. from the rag_test.txt document about john how old is he in the beginning of the story and then at the end of the story
+        2. from the rag_test_2.txt document about mathew what rattled the door
     """))
     printer(result)
 
@@ -97,8 +94,17 @@ def test_tool_calling(printer) -> None:
     
     chat_model.add_tools([tool])
     
-    result: str = str(chat_model.prompt("/no_think what is the square root of 8367391"))
+    result: str = str(chat_model.prompt(" what is the square root of 8367391"))
     printer(result)
+    
+
+def test_memory(printer) -> None:
+    global chat_model
+    
+    result: str = str(chat_model.prompt(" what is my name?"))
+    printer(result)
+    
+    
     
     
 

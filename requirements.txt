@@ -16,6 +16,5 @@ pydantic
 tqdm
 tomli
 llama-index-vector-stores-faiss
-faiss-cpu 
-pytest-asyncio
+faiss-cpu
 nest_asyncio

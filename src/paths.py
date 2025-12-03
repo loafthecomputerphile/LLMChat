@@ -24,6 +24,7 @@ if platform.system().lower() == "linux":
 
 MODELS_FOLDER: Path = DATA_FOLDER / "ollama_data" / "models"
 OLLAMA_HOME_FOLDER: Path = DATA_FOLDER / "ollama_data" / "ollama_home"
+SERVER_LOG_FOLDER: Path = DATA_FOLDER / "ollama_data" / "logs"
 
 
 
