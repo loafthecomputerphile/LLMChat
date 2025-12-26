@@ -7,6 +7,9 @@ FOR %%A IN ("%~dp0..\\..") DO SET "ParentDir=%%~fA"
 set "ARGS=%*"
 set OLLAMA_ORIGINS=*
 set "PORT=11500"
+set OLLAMA_NO_AUTOSTART=1
+set OLLAMA_FLASH_ATTENTION=1
+set "OLLAMA_KV_CACHE_TYPE=q8_0"
 set "OLLAMA_MODELS=%ParentDir%\\ollama_data\\models"
 set "OLLAMA_HOME=%ParentDir%\\ollama_data\\ollama_home"
 if not exist "%OLLAMA_MODELS%" mkdir "%OLLAMA_MODELS%"
@@ -26,6 +29,10 @@ ARGS="$@"
 
 export OLLAMA_ORIGINS="*"
 PORT=11500
+
+export OLLAMA_NO_AUTOSTART=1
+export OLLAMA_FLASH_ATTENTION=1
+export OLLAMA_KV_CACHE_TYPE="q8_0"
 export OLLAMA_MODELS="$PARENT_DIR/ollama_data/models"
 export OLLAMA_HOME="$PARENT_DIR/ollama_data/ollama_home"
 export OLLAMA_HOST="127.0.0.1:$PORT"
@@ -49,6 +56,9 @@ ARGS="$@"
 
 export OLLAMA_ORIGINS="*"
 PORT=11500
+export OLLAMA_NO_AUTOSTART=1
+export OLLAMA_FLASH_ATTENTION=1
+export OLLAMA_KV_CACHE_TYPE="q8_0"
 export OLLAMA_MODELS="$PARENT_DIR/ollama_data/models"
 export OLLAMA_HOME="$PARENT_DIR/ollama_data/ollama_home"
 export OLLAMA_HOST="127.0.0.1:$PORT"

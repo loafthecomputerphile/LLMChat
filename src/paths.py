@@ -2,8 +2,11 @@ import platform
 from pathlib import Path
 
 
-ROOT: Path = Path(__file__).parent.parent
+_current: Path = Path(__file__).parent
+ROOT: Path = _current.parent
 
+
+CONFIG: Path = _current / "config.toml"
 DATA_FOLDER: Path = ROOT / "data" 
 
 BINARIES_FOLDER: Path = DATA_FOLDER / "bin"

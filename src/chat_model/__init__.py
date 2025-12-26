@@ -1,1 +1,1 @@
-from .chat_model import ChatModel, ModelParams
+from .chat_model import ChatModel, ModelParams, DirectToolDesc
