@@ -5,7 +5,7 @@ from llama_index.core.tools.tool_spec.base import BaseToolSpec
 class UnitConvertionToolSpec(BaseToolSpec):
     """Unit Conversion tool spec."""
 
-    spec_functions = ["converter", "convert_to_base_unit", "adjust_unit"]
+    spec_functions = ["convert_to", "convert_to_base_unit", "adjust_unit"]
         
     def convert_to(self, value: Union[float, int], from_unit: str, to_unit: str) -> str:
         """
@@ -18,6 +18,7 @@ class UnitConvertionToolSpec(BaseToolSpec):
             value (float | int): The numeric value to convert
             from_unit (str): The source unit
             to_unit (str): The target unit
+            
         """
         import pint
         
@@ -33,10 +34,8 @@ class UnitConvertionToolSpec(BaseToolSpec):
     
     def convert_to_base_unit(self, value: Union[float, int], unit: str) -> str:
         """
-        Convert a numeric value to its base SI unit.
+        Convert a numeric value to its base SI units.
 
-        Use this when the user asks for the base or fundamental unit
-        of a given quantity.
 
         Args:
             value (float | int): The numeric value
@@ -55,10 +54,8 @@ class UnitConvertionToolSpec(BaseToolSpec):
        
     def adjust_unit(self, value: Union[float, int], unit: str) -> str:
         """
-        Convert a numeric value to a more human-readable unit.
+        Convert a numeric value to a more human-readable or compact unit.
 
-        Use this when the user wants a compact or more intuitive
-        representation (e.g. 1000 meters → 1 kilometer).
 
         Args:
             value (float | int): The numeric value

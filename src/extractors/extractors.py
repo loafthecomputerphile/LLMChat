@@ -1,4 +1,4 @@
-import os
+import os, uuid
 
 from .extraction_utils import bytes_to_megabytes, get_mimetype, set_pandoc_env
 from ..flags import ExtractionErrors, EXTRACTION_ERROR_FLAG
@@ -39,13 +39,13 @@ def excel_extractor(file_path: str) -> list[Document] | str:
     }
     
     if not isinstance(spread_sheet, dict):
-        return [Document(text=spread_sheet.to_string(), metadata=metadata)]
+        return [Document(text=spread_sheet.to_string(), id_=str(uuid.uuid4()), metadata=metadata)]
     
     for i, (name, data) in enumerate(spread_sheet.items()):
         meta = dict(metadata)
         meta["sheet_index"] = i
         meta["sheet_name"] = name
-        result.append(Document(text=data.to_string(), metadata=meta))
+        result.append(Document(text=data.to_string(), id_=str(uuid.uuid4()), metadata=meta))
     
     return result
 
@@ -64,7 +64,7 @@ def plain_extractor(file_path: str) -> list[Document] | str:
         text: str = file.read()
     
     return [
-        Document(text=text, metadata={
+        Document(text=text, id_=str(uuid.uuid4()), metadata={
             "file_name":file_path.rsplit(".", 1)[0],
             "file_path": file_path, "file_type":file_path.split(".")[-1]
         })
@@ -85,7 +85,7 @@ def word_extractor(file_path: str) -> list[Document] | str:
     text: str = pypd.convert_file(file_path, 'plain', sandbox=True)
     
     return [
-        Document(text=text, metadata={
+        Document(text=text, id_=str(uuid.uuid4()), metadata={
             "file_name":file_path.rsplit(".", 1)[0],
             "file_path": file_path, "file_type":get_mimetype(file_path)
         })
@@ -111,7 +111,7 @@ def pdf_extractor(file_path: str) -> list[Document] | str:
         
     return [
         Document(
-            text=text, metadata={
+            text=text, id_=str(uuid.uuid4()), metadata={
                 "file_name":file_path.rsplit(".", 1)[0], "file_path":file_path,
                 "file_type":get_mimetype(file_path)
             }
@@ -130,7 +130,7 @@ def presentation_extractor(file_path: str) -> list[Document] | str:
     
     try:
         return [
-            Document(text=parse_office(file_path), metadata={
+            Document(text=parse_office(file_path), id_=str(uuid.uuid4()), metadata={
                 "file_path":file_path, "file_type": get_mimetype(file_path)
             })
         ]

@@ -1,1 +1,1 @@
-from .async_web import AsyncWebPageReader
+from .web_reader import SimpleWebPageReader

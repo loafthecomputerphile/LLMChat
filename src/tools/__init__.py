@@ -1,4 +1,4 @@
 from .wikipedia_tool import BetterWikipediaToolSpec
 from .web_search import WebSearchToolSpec
 from .unit_converter import UnitConvertionToolSpec
-from .math_tool import AutoChainedSympyMathToolSpec
+from .math_tool import AutoChainedSympyMathToolSpec, SimpleMathToolSpec

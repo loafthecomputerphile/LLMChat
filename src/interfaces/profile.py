@@ -3,28 +3,41 @@ from typing import Callable
 from base64 import b64encode
 import gzip
 
-from pathlib import Path
 import dill
-
+from pathlib import Path
+from llama_index.core.llms import ChatMessage
+from pydantic import BaseModel, Field, ConfigDict
 
 CHAT_DATA: Path = Path.home() / "Documents" / "LLMChat"
 PROFILE_PATH: Callable[[str], Path] = lambda name: CHAT_DATA / name
 HISTORY_PATH: Callable[[str], Path] = lambda name: PROFILE_PATH(name) / "histories"
 
 
+class ChatHistory(BaseModel):
+    character_instruction: str = Field("")
+    messages: list[ChatMessage] = Field(default_factory=list)
+    
+    model_config: ConfigDict = ConfigDict(arbitrary_types_allowed=True)
+    
+
 class BaseProfile:
 
     def __init__(self, username: str) -> None:
         self.username: str = username
+        self.info: str = ""
         self.history_files: dict[str, str] = {}
         
     def get_history_path(self, name: str) -> str | None:
         return self.history_files.get(name, None)
         
     def add_new_history(self, name: str) -> None:
-        path: str = str(HISTORY_PATH(self.username) / b64encode(name.encode('utf-8')).decode('utf-8'))
+        path: str = str(
+            HISTORY_PATH(self.username) / 
+            b64encode(name.encode('utf-8')).decode('utf-8')
+        )
+        
         with gzip.open(path, "wb") as file: 
-            dill.dump([], file)
+            dill.dump(ChatHistory().model_dump(), file)
         
         self.history_files[name] = path
         

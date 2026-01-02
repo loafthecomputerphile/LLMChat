@@ -7,11 +7,11 @@ from pydantic import BaseModel, Field, ConfigDict
 import dill
 
 from ..chat_model import ChatModel
-from .profile import BaseProfile
+from .profile import BaseProfile, ChatHistory
 
 if TYPE_CHECKING:
     from llama_index.core.tools import BaseTool
-    from ..chat_model import DirectToolDesc, ModelParams
+    from ..chat_model import ModelParams
     
     
     
@@ -37,7 +37,7 @@ class BaseChatSession(BaseModel):
     in_session: bool = Field(False, init=False)
     history_loaded: bool = Field(False, init=False)
     history_path: str | None = Field(None, init=False)
-    history: list[ChatMessage] | None = Field(None, init=False)
+    history: ChatHistory = Field(default_factory=ChatHistory, init=False)
     
     model_config: ConfigDict = ConfigDict(arbitrary_types_allowed=True)
     
@@ -48,11 +48,12 @@ class BaseChatSession(BaseModel):
         assert self.in_session, "session has not been started"
         return self.model.astream_prompt
     
-    def start_session(self, params: ModelParams, tools: list[BaseTool] | None = None, new_tools: list[DirectToolDesc] | None = None) -> None:
+    def start_session(self, params: ModelParams, tools: list[BaseTool] | None = None) -> None:
         assert not self.in_session, "session has already started"
         
+        self.model.set_user_info(self.user.info)
         self.model.load_parameters(params)
-        self.model.load_model(tools, new_tools)
+        self.model.load_model(tools)
         self.in_session = True
         
     def end_session(self) -> None:
@@ -64,19 +65,34 @@ class BaseChatSession(BaseModel):
             
         self.user.save_profile()
         
-        self.model.memory.reset()
+        self.model.clear_memory()
         self.model.kill()
         self.in_session = False
         
     def new_history(self, name: str) -> str | None:
         assert self.in_session, "session has not been started"
         self.user.add_new_history(name) 
+        
+    def set_character_instruction(self, instruction: str) -> None:
+        assert self.in_session, "session has not been started"
+        if not instruction:
+            return
+        self.history.character_instruction = instruction
+        self.model.set_character_prompt(instruction)
+        
+    def set_user_information(self, info: str) -> None:
+        assert self.in_session, "session has not been started"
+        if not info:
+            return
+        self.user.info = info
+        self.model.set_user_info(info)
     
     def save_history(self) -> None:
         assert self.in_session, "session has not been started"
+        self.history.messages = self.model.memory.get_all()
         
         with gzip.open(self.history_path, "wb") as file:
-            dill.dump(self.model.memory.get_all(), file)
+            dill.dump(self.history.model_dump(), file)
             
     def load_history(self, name: str) -> None:
         assert self.in_session, "session has not been started"
@@ -87,14 +103,17 @@ class BaseChatSession(BaseModel):
         
         self.history_path = self.user.history_files[name]
         with gzip.open(self.history_path, "rb") as file:
-            self.history = dill.load(file)
+            self.history = ChatHistory.model_validate(dill.load(file))
         
-        self.model.memory.reset()   
-        self.model.add_memory(self.history)
+        if self.history.character_instruction:
+            self.model.set_character_prompt(self.history.character_instruction)
+            
+        self.model.clear_memory()  
+        self.model.add_memory(self.get_history_messages())
         self.history_loaded = True
             
     def get_history_messages(self) -> list[ChatMessage]:
-        return self.history
+        return self.history.messages
     
     def stop_prompt(self) -> None:
         assert self.in_session, "session has not been started"

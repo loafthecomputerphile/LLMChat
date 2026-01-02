@@ -11,7 +11,6 @@ openpyxl
 xlrd
 llama-index-embeddings-ollama
 llama-index-llms-ollama
-llama-index-tools-duckduckgo
 llama-index-tools-wikipedia
 pathlib
 pydantic
@@ -21,12 +20,11 @@ llama-index-vector-stores-faiss
 faiss-cpu
 nest_asyncio
 dill
-textual
-rich
 aiohttp 
-beautifulsoup4 
-readability-lxml 
+beautifulsoup4
 lxml
 html2text
 pint
 sympy
+ddgs
+html5lib

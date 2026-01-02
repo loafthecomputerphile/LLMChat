@@ -1,62 +1,87 @@
 from __future__ import annotations
+import time
 from typing import Callable, TYPE_CHECKING, Optional
 
-from llama_index.core import VectorStoreIndex
+from llama_index.core import VectorStoreIndex, Settings
 from llama_index.core.tools.tool_spec.base import BaseToolSpec
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.tools.duckduckgo import DuckDuckGoSearchToolSpec
+from ddgs import DDGS
 
-from ..extractors.readers import AsyncWebPageReader
+from ..extractors.readers import SimpleWebPageReader
 
 if TYPE_CHECKING:
+    from llama_index.core.node_parser import TextSplitter
     from llama_index.core.base.response.schema import Response
     from llama_index.core.schema import BaseNode, Document
     from llama_index.core.query_engine import BaseQueryEngine
 
 
+ENGINES = [
+    "bing", "brave", "duckduckgo", "google", "mojeek", "yandex", "yahoo"
+]
+
+
 class WebSearchToolSpec(BaseToolSpec):
     """EfficientWebSearch tool spec."""
 
-    spec_functions = ["web_search", "duckduckgo_full_search"]
+    spec_functions = ["web_search", "suggest_sites"]
 
-    def __init__(self) -> None:
-        self.search_func: Callable[[str, str, int], list[dict[str, str]]] = DuckDuckGoSearchToolSpec().duckduckgo_full_search
-        self.splitter: SentenceSplitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
-        self.reader: AsyncWebPageReader = AsyncWebPageReader(html_to_text=True)
+    def __init__(self, store: VectorStoreIndex, splitter: TextSplitter) -> None:
+        self.splitter: TextSplitter = splitter
+        self.vector_index: VectorStoreIndex = store
+        self.reader: SimpleWebPageReader = SimpleWebPageReader(html_to_text=True)
         
     def suggest_sites(self, query: str, max_results: Optional[int] = 5) -> list[dict[str, str]]:
         """
-        Search the internet for a websites related to the given query and return.   
-        Use this when the user requests potential sites to find information or suggestions
+        Find websites related to a topic without answering the question.
+
+        Use this tool when:
+        - The user asks for sources, links, or places to read
+        - The user wants recommendations of websites
+        - The user asks “where can I find…”, “sites about…”, or “good resources for…”
+
+        Do NOT use this tool when:
+        - The user asks for a direct answer or explanation
+        - The goal is factual synthesis rather than discovery
 
         Args:
             query (str): the string to search for
             max_results (Optional[int]): The maximum number of results to be returned
 
         """
+        from ddgs import DDGS
         
-        return self.search_func(query, max_results)
+        params = {
+            "query": query,
+            "max_results": max_results,
+            "backend":"duckduckgo"
+        }
+        
+        with DDGS() as ddg:
+            return list(ddg.text(**params))
         
     def web_search(self, query: str) -> str:
         """
-        Search the internet for a websites related to the given query and return .
-        Use this tool when the user requests exact/specific information from the internet
+        Answer a question using live internet data and retrieval-augmented generation.
+
+        Use this tool when:
+        - The user asks a factual or explanatory question
+        - The information may be recent, evolving, or niche
+        - The answer benefits from reading multiple web pages
+
+        Do NOT use this tool when:
+        - The user only wants a list of websites or sources
+        - The answer is purely conceptual and unlikely to require web data
 
         Args:
             query (str): the string to search for
-
+        
         """
-        
-        results: list[dict[str, str]] = self.search_func(query, max_results=3)
+        results: list[dict[str, str]] = self.suggest_sites(query, max_results=3)
         urls: list[str] = [r["href"] for r in results]
-
-        docs: list[Document] = self.reader.load_data(urls)
-        nodes: BaseNode = self.splitter.get_nodes_from_documents(docs)
         
-        engine: BaseQueryEngine = VectorStoreIndex(nodes).as_query_engine(
-            similarity_top_k=3
-        )
+        for i, doc in enumerate(self.reader.load_data(urls)):
+            results[i]["text-content"] = doc.text
         
-        response: Response = engine.query(query)
-        return str(response)
+        return results
 

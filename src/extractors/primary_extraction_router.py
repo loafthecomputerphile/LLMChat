@@ -9,14 +9,9 @@ from llama_index.core.node_parser import LangchainNodeParser
 from .extractors import *
 from .types import ExtractorBundle
 
-if TYPE_CHECKING:
-    from llama_index.core import Document
-    from llama_index.core.node_parser import TextSplitter
 
-BASE_CHUNK_SIZE: int = 512
-BASE_OVERLAP: int = 128
-
-
+BASE_CHUNK_SIZE: int = 2000
+BASE_OVERLAP: int = 256
 
 EXT_TO_LANG = {
     ".cpp": Language.CPP,

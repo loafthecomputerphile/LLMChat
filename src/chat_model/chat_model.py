@@ -1,6 +1,6 @@
 from __future__ import annotations
 from threading import Lock
-import os, subprocess, asyncio, gc
+import os, subprocess, asyncio, gc, datetime
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Generator, Any, AsyncGenerator
@@ -12,6 +12,8 @@ from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.core import VectorStoreIndex, Settings
 from llama_index.core.llms import ChatMessage
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from llama_index.core.node_parser import LangchainNodeParser
 from llama_index.core.prompts import MessageRole
 from llama_index.core.tools.types import BaseTool
 from llama_index.core.tools import QueryEngineTool
@@ -57,24 +59,6 @@ class ModelParams(BaseModel):
 EMBEDDING_DIMENSIONS: int = 384
 
 
-class DirectToolDesc(BaseModel):
-    name: str
-    direction: str
-    priotity: bool
-    usage_examples: list[str]
-    non_usage: list[str]
-    
-    def _make_list_sec(self, strings: list[str]) -> str:
-        return "\n".join(f"- {s}" for s in strings)
-     
-    def make_md(self) -> str:
-        example_section: str = self._make_list_sec(self.usage_examples)
-        md_text: str = f"## {self.name}\n{self.direction}\n{example_section}"
-        return md_text
-    
-    def __str__(self) -> str:
-        return self.make_md()
-        
 
 config_loader: ConfigLoader = ConfigLoader()
 config_loader.load()
@@ -83,42 +67,41 @@ config_loader.load()
 class ChatModel:
     
     __slots__ = (
-        "extraction_router", 
-        "character_prompt", 
-        "thinking_on", 
-        "faiss_index", 
-        "agent", 
-        "system_prompt", 
-        "llm_name", 
-        "llm_params", 
-        "ollama_server", 
-        "error_flag", 
-        "memory", 
-        "model", 
-        "embedding", 
-        "vector_store", 
-        "tools",
-        "_stop_lock",
-        "_stop_flag"
+        "extraction_router", "character_prompt", "thinking_on", 
+        "faiss_index", "agent", "system_prompt", "llm_name", 
+        "llm_params", "ollama_server", "error_flag", "memory", 
+        "model", "embedding", "vector_store", "tools", "_stop_lock",
+        "_stop_flag", "user_info", "tool_vector_store", "tool_text_splitter"
     )
     
-    def __init__(self, extractor: ExtractionRouter, system_prompt: str | None = None, character_prompt: str | None = None) -> None:
-        self.system_prompt: str | None = system_prompt
-        self.character_prompt: str | None = character_prompt
+    def __init__(self, extractor: ExtractionRouter) -> None:
         self.extraction_router: ExtractionRouter = extractor
         self.thinking_on: bool = False
         self.tools: list[BaseTool] = []
-        self.model: FunctionCallingLLM | None = None
-        self.llm_name: str | None = None
+        
         self.ollama_server: Popen | None = None
         self.error_flag: Exception | None = None
-        self.agent: FunctionAgent  | None = None
+        
+        self.llm_name: str | None = None
         self.llm_params: ModelParams | None = None
+        
+        self.agent: FunctionAgent  | None = None
         self.embedding: BaseEmbedding | None = None
-        self.memory: SimpleComposableMemory | None = None
+        self.model: FunctionCallingLLM | None = None
+        self.memory: Memory | None = None
         self.vector_store: VectorStoreIndex | None = None
+        
         self._stop_lock: Lock = Lock()
         self._stop_flag: bool = False
+        
+        self.user_info: str | None = None
+        self.system_prompt: str | None = None
+        self.character_prompt: str | None = None
+        
+        self.tool_vector_store: VectorStoreIndex | None = None
+        self.tool_text_splitter: LangchainNodeParser = LangchainNodeParser(
+            RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=256)
+        )
         
         os.environ.setdefault('OLLAMA_HOST', config_loader.get("URLs", "SERVER_URL"))
         os.environ["OLLAMA_PATH"] = str(PORTABLE_OLLAMA_EXE / "ollama")
@@ -193,9 +176,13 @@ class ChatModel:
         self.agent.llm.context_window = value
         
     def set_system_prompt(self, prompt: str) -> None:
-        assert self.agent is not None, "self.agent of ChatModel must be set"
         self.system_prompt = prompt
-        self.agent.llm.system_prompt = self.system_prompt
+        
+    def set_character_prompt(self, prompt: str) -> None:
+        self.character_prompt = prompt
+        
+    def set_user_info(self, info: str) -> None:
+        self.user_info = info
         
     def load_parameters(self, params: ModelParams) -> None:
         self.llm_params = params
@@ -287,8 +274,7 @@ class ChatModel:
         if self.memory is None:
             yield
             return
-
-        memory: Memory = self.memory.primary_memory
+        
         injected: list[ChatMessage] = []
 
         def inject(prompt: str | None) -> None:
@@ -300,16 +286,24 @@ class ChatModel:
                 additional_kwargs={"ephemeral": True},
             )
             
-            memory.put(msg)
+            self.memory.put(msg)
             injected.append(msg)
+        
+        new_system_prompt: str = "\n\n".join((
+            f"Current date and time: {datetime.datetime.now()}",
+            f"## User Information:\n{self.user_info if self.user_info else "None"}",
+            f"## Additional System Prompt:\n{self.system_prompt}"
+        ))
+        
+        if self.character_prompt:
+            new_system_prompt += f"\n\n## Use this persona while adhearing to all other rules:\n{self.character_prompt}"
             
-        inject(self.system_prompt)
-        inject(self.character_prompt)
+        inject(new_system_prompt)
 
         try:
             yield
         finally:
-            messages: list[ChatMessage] = memory.get_all()
+            messages: list[ChatMessage] = self.memory.get_all()
             for msg in reversed(injected):
                 for i in range(len(messages) - 1, -1, -1):
                     if messages[i].role != MessageRole.SYSTEM:
@@ -320,27 +314,25 @@ class ChatModel:
                     break
 
             
-    def load_model(self, tools: list[BaseTool] | None = None, new_tools: list[DirectToolDesc] | None = None) -> None:
-        from ..tools import BetterWikipediaToolSpec, WebSearchToolSpec, UnitConvertionToolSpec, AutoChainedSympyMathToolSpec
+    def load_model(self, tools: list[BaseTool] | None = None) -> None:
+        from ..tools import (
+            BetterWikipediaToolSpec, WebSearchToolSpec, UnitConvertionToolSpec, 
+            AutoChainedSympyMathToolSpec, SimpleMathToolSpec
+        )
         
         self.llm_name = config_loader.get("Models", "BASE_MODEL")
         self.run_ollama_server(10)
         
         server_url: str = config_loader.get("URLs", "SERVER_URL")
-        system_prompt: str = config_loader.get("Prompts", "SYSREM_PROMPT")
+        self.system_prompt = config_loader.get("Prompts", "SYSREM_PROMPT")
         
         self.embedding = OllamaEmbedding(
             config_loader.get("Models", "EMBEDDING_MODEL_NAME"), 
             base_url=server_url, embed_batch_size=128
         )
         
-        tool_map: map[str] = map(str, [] if not new_tools else new_tools)
-        self.system_prompt = system_prompt.format(
-            new_tools="" if new_tools is None else "\n\n".join(tool_map)
-        )
-        
         self.model = Ollama(
-            model=self.llm_name, temperature=self.llm_params.temperature, system_prompt=self.system_prompt,
+            model=self.llm_name, temperature=self.llm_params.temperature,
             context_window=self.llm_params.context_window, base_url=server_url, thinking=False
         )
         
@@ -353,36 +345,21 @@ class ChatModel:
             tools=self.tools, system_prompt=self.system_prompt
         )
         
-        self.add_tools(BetterWikipediaToolSpec().to_tool_list())
-        self.add_tools(WebSearchToolSpec().to_tool_list())
+        self.tool_vector_store: VectorStoreIndex = VectorStoreIndex(
+            [], vector_store=None, embed_model=self.embedding
+        )
+        
+        self.add_tools(BetterWikipediaToolSpec(self.tool_vector_store, self.tool_text_splitter).to_tool_list())
+        self.add_tools(WebSearchToolSpec(self.tool_vector_store, self.tool_text_splitter).to_tool_list())
         self.add_tools(UnitConvertionToolSpec().to_tool_list())
         self.add_tools(AutoChainedSympyMathToolSpec().to_tool_list())
+        self.add_tools(SimpleMathToolSpec().to_tool_list())
         
         if tools is not None:
             self.add_tools(tools)
     
     def _initialize_memory(self) -> None:
-        memory: Memory = Memory.from_defaults(token_limit=self.llm_params.history_tokens)
-        vector_memory: VectorMemory | None = None
-        
-        if not self.llm_params.long_term_memory:
-            self.memory = SimpleComposableMemory(
-                primary_memory=memory, secondary_memory_sources=None
-            )
-            return
-            
-        vector_memory: VectorMemory = VectorMemory.from_defaults(
-            vector_store=None,
-            embed_model=self.embedding,
-            index_kwargs={
-                "similarity_top_k": self.llm_params.top_k_memory,
-                "max_tokens": self.llm_params.long_term_tokens,  
-            }
-        )
-        
-        self.memory = SimpleComposableMemory(
-            primary_memory=memory, secondary_memory_sources=[vector_memory]
-        )
+        self.memory: Memory = Memory.from_defaults(token_limit=self.llm_params.history_tokens)
         
     def clear_memory(self) -> None:
         assert self.memory is not None, "self.memory of ChatModel must be set"
@@ -398,15 +375,17 @@ class ChatModel:
         
     async def astream_prompt(self, prompt) -> AsyncGenerator[str, None]:
         self._stop_flag = False
-        handler = self.agent.run(user_msg=prompt, memory=self.memory)
+        with self._temporary_context():
+            handler = self.agent.run(user_msg=prompt, memory=self.memory)
 
-        async for event in handler.stream_events():
-            if self._check_stop(): break
-            
-            if isinstance(event, AgentStream):
-                yield event.delta
-            elif isinstance(event, ToolCall):
-                yield f"\n🔧 Tool called: {event.tool_name}\n"
+            async for event in handler.stream_events():
+                if self._check_stop(): break
+                
+                if isinstance(event, AgentStream):
+                    yield event.delta
+                elif isinstance(event, ToolCall):
+                    yield f"\n🔧 Tool called: {event.tool_name}\n"
+                    continue
         
     async def aprompt(self, prompt_text: str) -> WorkflowHandler:
         assert self.agent is not None, "self.agent of ChatModel must be set"
