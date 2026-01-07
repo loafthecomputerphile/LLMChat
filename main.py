@@ -85,7 +85,7 @@ async def chat_loop(session: BaseChatSession) -> None:
         print("\nassistant > ", end="", flush=True)
 
         try:
-            async for token in session.send_message()(user_input):
+            async for token in session.send_message(user_input):
                 print(token, end="", flush=True)
             print("\n")
 
