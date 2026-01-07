@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Generator, Any, AsyncGenerator
  
 import nest_asyncio
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.ollama import OllamaEmbedding
@@ -51,9 +51,9 @@ class ModelParams(BaseModel):
     context_window: int
     rag_top_k: int
     history_tokens: int
-    long_term_memory: bool
-    long_term_tokens: int
-    top_k_memory: int
+    long_term_memory: bool = Field(False)
+    long_term_tokens: int = Field(2048)
+    top_k_memory: int = Field(4)
 
 
 EMBEDDING_DIMENSIONS: int = 384
@@ -345,7 +345,7 @@ class ChatModel:
             tools=self.tools, system_prompt=self.system_prompt
         )
         
-        self.tool_vector_store: VectorStoreIndex = VectorStoreIndex(
+        self.tool_vector_store = VectorStoreIndex(
             [], vector_store=None, embed_model=self.embedding
         )
         
@@ -373,11 +373,10 @@ class ChatModel:
         with self._stop_lock:
             return self._stop_flag
         
-    async def astream_prompt(self, prompt) -> AsyncGenerator[str, None]:
+    async def astream_prompt(self, prompt: str) -> AsyncGenerator[str, None]:
         self._stop_flag = False
         with self._temporary_context():
             handler = self.agent.run(user_msg=prompt, memory=self.memory)
-
             async for event in handler.stream_events():
                 if self._check_stop(): break
                 
@@ -385,7 +384,7 @@ class ChatModel:
                     yield event.delta
                 elif isinstance(event, ToolCall):
                     yield f"\n🔧 Tool called: {event.tool_name}\n"
-                    continue
+        
         
     async def aprompt(self, prompt_text: str) -> WorkflowHandler:
         assert self.agent is not None, "self.agent of ChatModel must be set"

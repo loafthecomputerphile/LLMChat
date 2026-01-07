@@ -44,9 +44,9 @@ class BaseChatSession(BaseModel):
     def get_histories(self) -> list[str]:
         return self.user.history_names
     
-    def send_message(self) -> AsyncGenerator[str, None]:
+    def send_message(self, message: str) -> AsyncGenerator[str, None]:
         assert self.in_session, "session has not been started"
-        return self.model.astream_prompt
+        return self.model.astream_prompt(message)
     
     def start_session(self, params: ModelParams, tools: list[BaseTool] | None = None) -> None:
         assert not self.in_session, "session has already started"
