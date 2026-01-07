@@ -1,171 +1,235 @@
 from __future__ import annotations
-import os, subprocess, asyncio
-from typing import Any, TYPE_CHECKING
+from threading import Lock
+import os, subprocess, asyncio, gc, datetime
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING, Generator, Any, AsyncGenerator
+ 
+import nest_asyncio
+from pydantic import BaseModel, Field
 
 from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.ollama import OllamaEmbedding
-from llama_index.core.agent.workflow import FunctionAgent
+from llama_index.core import VectorStoreIndex, Settings
+from llama_index.core.llms import ChatMessage
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from llama_index.core.node_parser import LangchainNodeParser
+from llama_index.core.prompts import MessageRole
+from llama_index.core.tools.types import BaseTool
+from llama_index.core.tools import QueryEngineTool
+from llama_index.core.agent.workflow import FunctionAgent, AgentStream, ToolCall
 from llama_index.core.memory import Memory, VectorMemory, SimpleComposableMemory
-from llama_index.core.workflow.handler import WorkflowHandler
-from llama_index.core import VectorStoreIndex
-from llama_index.core.tools import QueryEngineTool, FunctionTool
-from pydantic import BaseModel
 
-from ..paths import PORTABLE_OLLAMA, OLLAMA_HOME_FOLDER, MODELS_FOLDER
-from .. import variables
-from ..extractors.extraction_router import ExtractionRouter
+from ..paths import (
+    PORTABLE_OLLAMA,  OLLAMA_HOME_FOLDER, 
+    MODELS_FOLDER, PORTABLE_OLLAMA_EXE
+)
+
+from ..variables import ConfigLoader
 
 if TYPE_CHECKING:
-    from llama_index.core.indices.base import BaseIndex
-    from llama_index.core.embeddings import BaseEmbedding
-    from llama_index.core import Document
-    from llama_index.core.query_engine import BaseQueryEngine
     from subprocess import Popen, STARTUPINFO
     
-
-
+    from llama_index.core.schema import BaseNode
+    from llama_index.core.query_engine import BaseQueryEngine
+    from llama_index.core.workflow.handler import WorkflowHandler
+    from llama_index.core.embeddings import BaseEmbedding
+    from llama_index.core.llms.function_calling import FunctionCallingLLM
     
+    from ..extractors.extraction_router import ExtractionRouter
+
+
+__all__ = ["ModelParams", "SYSREM_PROMPT", "ChatModel", "DirectToolDesc"]
+
+
+if os.name == "nt":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
 class ModelParams(BaseModel):
     temperature: float
     context_window: int
     rag_top_k: int
     history_tokens: int
-    long_term_memory: bool
-    long_term_tokens: int
-    top_k_memory: int
-    
-    
+    long_term_memory: bool = Field(False)
+    long_term_tokens: int = Field(2048)
+    top_k_memory: int = Field(4)
 
-RAG_PROMPT: str =  """
-Answers questions by retrieving relevant passages from the indexed document set currently in memory.
-Use it only when the question involves content that may exist in those documents.
-Skip this tool for open-ended, speculative, or conversational prompts.
-"""
 
 EMBEDDING_DIMENSIONS: int = 384
 
 
-def create_rag_tool(model: Ollama, embeddimg_model: BaseEmbedding, description: str, top_k: int = 4) -> tuple[QueryEngineTool, BaseIndex]:
-    index: VectorStoreIndex = VectorStoreIndex([], embed_model=embeddimg_model)
-    
-    query_engine: BaseQueryEngine = index.as_query_engine(llm=model, similarity_top_k=top_k)
-    query_tool: QueryEngineTool = QueryEngineTool.from_defaults(
-        query_engine=query_engine, name="RAGSearch", description=description
-    )
-    
-    return query_tool, index
 
-
-def make_cutsom_memory(
-    memory_tokens: int, use_vector_store: bool, embedding_model: BaseEmbedding | None = None, 
-    vector_tokens: int | None = None, top_limit: int | None = None
-    ) -> SimpleComposableMemory:
-    memory: Memory = Memory.from_defaults(token_limit=memory_tokens)
-    vector_memory: VectorMemory | None = None
-    
-    if use_vector_store:
-        vector_memory: VectorMemory = VectorMemory.from_defaults(
-            vector_store=None,
-            embed_model=embedding_model,
-            index_kwargs={
-                "similarity_top_k": top_limit,
-                "max_tokens": vector_tokens,  
-            }
-        )
-        
-    return SimpleComposableMemory(
-        primary_memory=memory,
-        secondary_memory_sources=vector_memory if vector_memory is None else [vector_memory]
-    )
-
-
-def prepend_path(path_to_add: str) -> dict:
-    """Return a copy of os.environ with path_to_add placed at the front of PATH."""
-    env = os.environ.copy()
-    env["PATH"] = path_to_add + os.pathsep + env["PATH"]
-    return env
+config_loader: ConfigLoader = ConfigLoader()
+config_loader.load()
 
 
 class ChatModel:
     
-    __slots__ = ("extraction_router", "agent", "system_prompt", "llm_name", "llm_params", "ollama_server", "error_flag", "memory", "model", "embedding", "vector_store", "tools")
+    __slots__ = (
+        "extraction_router", "character_prompt", "thinking_on", 
+        "faiss_index", "agent", "system_prompt", "llm_name", 
+        "llm_params", "ollama_server", "error_flag", "memory", 
+        "model", "embedding", "vector_store", "tools", "_stop_lock",
+        "_stop_flag", "user_info", "tool_vector_store", "tool_text_splitter"
+    )
     
-    def __init__(self, extractor: ExtractionRouter, tools: list[FunctionTool] = []) -> None:
+    def __init__(self, extractor: ExtractionRouter) -> None:
         self.extraction_router: ExtractionRouter = extractor
-        self.embedding: BaseEmbedding = OllamaEmbedding(variables.EMBEDDING_MODEL_NAME, base_url=variables.SERVER_URL)
+        self.thinking_on: bool = False
+        self.tools: list[BaseTool] = []
+        
+        self.ollama_server: Popen | None = None
         self.error_flag: Exception | None = None
-        self.agent: FunctionAgent  | None = None
-        self.model: Ollama | None = None
-        self.system_prompt: str | None = None
+        
         self.llm_name: str | None = None
         self.llm_params: ModelParams | None = None
-        self.ollama_server: Popen | None = None
-        self.tools: list[FunctionTool] = []
-        self.memory: Memory | None = None
-        self.vector_store: BaseIndex | None = None
         
-        os.environ.setdefault('OLLAMA_HOST', str(variables.SERVER_URL))
+        self.agent: FunctionAgent  | None = None
+        self.embedding: BaseEmbedding | None = None
+        self.model: FunctionCallingLLM | None = None
+        self.memory: Memory | None = None
+        self.vector_store: VectorStoreIndex | None = None
+        
+        self._stop_lock: Lock = Lock()
+        self._stop_flag: bool = False
+        
+        self.user_info: str | None = None
+        self.system_prompt: str | None = None
+        self.character_prompt: str | None = None
+        
+        self.tool_vector_store: VectorStoreIndex | None = None
+        self.tool_text_splitter: LangchainNodeParser = LangchainNodeParser(
+            RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=256)
+        )
+        
+        os.environ.setdefault('OLLAMA_HOST', config_loader.get("URLs", "SERVER_URL"))
+        os.environ["OLLAMA_PATH"] = str(PORTABLE_OLLAMA_EXE / "ollama")
         os.environ.setdefault('OLLAMA_MODELS', str(MODELS_FOLDER))
         os.environ.setdefault('OLLAMA_HOME', str(OLLAMA_HOME_FOLDER))
-        
-        if tools:
-            for tool in tools: self.add_tool(tool)
+        os.environ.setdefault('OLLAMA_NO_AUTOSTART', str(1))
         
     def add_documents(self, paths: list[str]) -> list[str] | None:
-        if len(paths) == 0:
+        errors: list[str] = []
+        results: list[list[BaseNode] | str]
+        deletion_indexes: list[int] = []
+        path_length: int = len(paths)
+        
+        if path_length == 0: 
             return
         
-        with ThreadPoolExecutor(4) as pool:
-            results: list[list[Document] | str] = pool.map(
-                self.extraction_router.extract, paths
+        if path_length > 1:
+            with ThreadPoolExecutor(4) as pool:
+                results = pool.map(self.extraction_router.extract, paths)
+
+            for i, _ in filter(lambda x: isinstance(x[1], str), enumerate(results)):
+                errors.append(paths[i])
+                deletion_indexes.append(i)
+            
+            if deletion_indexes:
+                for index in deletion_indexes[::-1]: 
+                    del results[index]               
+            
+        elif path_length == 1:
+            results = [self.extraction_router.extract(paths[0])]
+            if isinstance(results[0], str): 
+                errors = [paths[0]]
+        
+        
+        if self.vector_store is None: 
+            self.vector_store = VectorStoreIndex(
+                [], vector_store=None, 
+                embed_model=self.embedding, show_progress=True
             )
         
-        errors: list[str] = [paths[i] for i, el in enumerate(results) if isinstance(el, str)]
+        for res in results: 
+            self.vector_store.insert_nodes(res)
+            
+        query_tool: QueryEngineTool = self._create_rag_tool(
+            config_loader.get("Prompts", "RAG_PROMPT"), self.llm_params.rag_top_k
+        )
         
-        if len(errors) == 0:
-            return
+        self.delete_tools(["document_data_tool"], False)
+        self.add_tools([query_tool])
+                
+        if len(errors) > 0:
+            return errors
         
-        return errors
+    def delete_tools(self, names: list[str], update_tools: bool = True) -> None:
+        assert self.agent is not None, "self.agent of ChatModel must be set"
+        
+        self.tools = [t for t in self.tools if t.metadata.name not in names]
+        
+        if update_tools:
+            self.agent.tools = self.tools
     
     def set_temperature(self, value: float) -> None:
-        if self.agent is None: 
-            return
+        assert self.agent is not None, "self.agent of ChatModel must be set"
         self.agent.llm.temperature = value
     
     def set_thinking(self, value: bool) -> None:
-        if self.agent is None: 
-            return
-        self.agent.llm.thinking = value
+        assert self.agent is not None, "self.agent of ChatModel must be set"
+        self.thinking_on = value
     
     def set_context_window(self, value: bool) -> None:
-        if self.agent is None: 
-            return
+        assert self.agent is not None, "self.agent of ChatModel must be set"
         self.agent.llm.context_window = value
         
     def set_system_prompt(self, prompt: str) -> None:
         self.system_prompt = prompt
-        if self.agent is not None:
-            self.agent.llm.system_prompt = self.system_prompt
+        
+    def set_character_prompt(self, prompt: str) -> None:
+        self.character_prompt = prompt
+        
+    def set_user_info(self, info: str) -> None:
+        self.user_info = info
         
     def load_parameters(self, params: ModelParams) -> None:
         self.llm_params = params
         
-    def add_tool(self, function: FunctionTool) -> None:
-        self.tools.append(function)
+    def add_tools(self, functions: list[BaseTool]) -> None:
+        assert self.agent is not None, "self.agent of ChatModel must be set"
+        
+        if not isinstance(functions, list):
+            raise TypeError("parameter 'functions' must be of type List[BaseTool]")
+        
+        valids: list[BaseTool] = []
+        for function in functions:
+            if not isinstance(function, BaseTool):
+                raise TypeError("element in functions is not of tyoe BaseTool")
+            valids.append(function)
+        
+        self.tools.extend(valids)
+        self.agent.tools = self.tools
+        
+    def _create_rag_tool(self, description: str, top_k: int = 4) -> QueryEngineTool:
+        query_engine: BaseQueryEngine = self.vector_store.as_query_engine(
+            llm=self.model, similarity_top_k=top_k
+        )
+        
+        query_tool: QueryEngineTool = QueryEngineTool.from_defaults(
+            query_engine=query_engine,
+            name="document_data_tool",
+            description=description
+        )
+
+        return query_tool
             
     def run_ollama_server(self, timeout: float = 20) -> None:
         
         try:
+            args: list[str] = [str(PORTABLE_OLLAMA), "serve"]
+            
             startup_info: STARTUPINFO = subprocess.STARTUPINFO()
             startup_info.dwFlags = subprocess.STARTF_USESHOWWINDOW
             startup_info.wShowWindow = subprocess.SW_HIDE
             
             self.ollama_server = subprocess.Popen(
-                [str(PORTABLE_OLLAMA), "serve"], shell=True,
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                args, shell=False, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 startupinfo=startup_info
             )
+            
             self.ollama_server.wait(timeout)
             
         except subprocess.TimeoutExpired as e:
@@ -175,37 +239,177 @@ class ChatModel:
             
         except Exception as e:
             self.error_flag = e
+            
+    def kill(self) -> None:
         
-    def load_model(self, name: str) -> None:
-        self.llm_name = name
-        self.run_ollama_server()
+        def run_cmd(model_name: str) -> None:
+            args: list[str] = [str(PORTABLE_OLLAMA), "stop", model_name]
+            
+            startup_info: STARTUPINFO = subprocess.STARTUPINFO()
+            startup_info.dwFlags = subprocess.STARTF_USESHOWWINDOW
+            startup_info.wShowWindow = subprocess.SW_HIDE
+            
+            server: subprocess.Popen = subprocess.Popen(
+                args, shell=False, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                startupinfo=startup_info
+            )
+            
+            server.wait(10)
+            
+        models: list[str] = [
+            config_loader.get("Models", key) 
+            for key in ("EMBEDDING_MODEL_NAME", "BASE_MODEL")
+        ]
+        
+        for model_name in models:
+            try:
+                run_cmd(model_name)
+                gc.collect()
+            except Exception as e:
+                continue
+    
+    @contextmanager
+    def _temporary_context(self) -> Generator[None, Any, Any]:
+        if self.memory is None:
+            yield
+            return
+        
+        injected: list[ChatMessage] = []
+
+        def inject(prompt: str | None) -> None:
+            if not prompt:
+                return
+            
+            msg: ChatMessage = ChatMessage(
+                role=MessageRole.SYSTEM, content=prompt,
+                additional_kwargs={"ephemeral": True},
+            )
+            
+            self.memory.put(msg)
+            injected.append(msg)
+        
+        new_system_prompt: str = "\n\n".join((
+            f"Current date and time: {datetime.datetime.now()}",
+            f"## User Information:\n{self.user_info if self.user_info else "None"}",
+            f"## Additional System Prompt:\n{self.system_prompt}"
+        ))
+        
+        if self.character_prompt:
+            new_system_prompt += f"\n\n## Use this persona while adhearing to all other rules:\n{self.character_prompt}"
+            
+        inject(new_system_prompt)
+
+        try:
+            yield
+        finally:
+            messages: list[ChatMessage] = self.memory.get_all()
+            for msg in reversed(injected):
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].role != MessageRole.SYSTEM:
+                        continue
+                    if messages[i].content != msg.content:
+                        continue
+                    messages.pop(i)
+                    break
+
+            
+    def load_model(self, tools: list[BaseTool] | None = None) -> None:
+        from ..tools import (
+            BetterWikipediaToolSpec, WebSearchToolSpec, UnitConvertionToolSpec, 
+            AutoChainedSympyMathToolSpec, SimpleMathToolSpec
+        )
+        
+        self.llm_name = config_loader.get("Models", "BASE_MODEL")
+        self.run_ollama_server(10)
+        
+        server_url: str = config_loader.get("URLs", "SERVER_URL")
+        self.system_prompt = config_loader.get("Prompts", "SYSREM_PROMPT")
+        
+        self.embedding = OllamaEmbedding(
+            config_loader.get("Models", "EMBEDDING_MODEL_NAME"), 
+            base_url=server_url, embed_batch_size=128
+        )
         
         self.model = Ollama(
             model=self.llm_name, temperature=self.llm_params.temperature,
-            context_window=self.llm_params.context_window, base_url=variables.SERVER_URL
+            context_window=self.llm_params.context_window, base_url=server_url, thinking=False
         )
         
-        query_tool, self.vector_store = create_rag_tool(
-            self.model, self.embedding, RAG_PROMPT, 
-            self.llm_params.rag_top_k
-        )
+        Settings.llm = self.model
+        Settings.embed_model = self.embedding
         
-        self.add_tool(query_tool)
         self._initialize_memory()
         self.agent = FunctionAgent(
-            llm=self.model, request_timeout=360.0,
+            llm=self.model, request_timeout=360.0, 
             tools=self.tools, system_prompt=self.system_prompt
         )
-    
-    def _initialize_memory(self) -> None:
-        self.memory = make_cutsom_memory(
-            memory_tokens=self.llm_params.history_tokens, use_vector_store=self.llm_params.long_term_memory,
-            embedding_model=self.embedding, vector_tokens=self.llm_params.long_term_tokens, 
-            top_limit=self.llm_params.top_k_memory
+        
+        self.tool_vector_store = VectorStoreIndex(
+            [], vector_store=None, embed_model=self.embedding
         )
         
-    async def aprompt(self, prompt_text: str) -> WorkflowHandler:
-        return await self.agent.run(prompt_text, memory=self.memory)
+        self.add_tools(BetterWikipediaToolSpec(self.tool_vector_store, self.tool_text_splitter).to_tool_list())
+        self.add_tools(WebSearchToolSpec(self.tool_vector_store, self.tool_text_splitter).to_tool_list())
+        self.add_tools(UnitConvertionToolSpec().to_tool_list())
+        self.add_tools(AutoChainedSympyMathToolSpec().to_tool_list())
+        self.add_tools(SimpleMathToolSpec().to_tool_list())
+        
+        if tools is not None:
+            self.add_tools(tools)
     
-    def prompt(self, prompt_text: str) -> str:
-        return str(asyncio.run(self.aprompt(prompt_text)))
+    def _initialize_memory(self) -> None:
+        self.memory: Memory = Memory.from_defaults(token_limit=self.llm_params.history_tokens)
+        
+    def clear_memory(self) -> None:
+        assert self.memory is not None, "self.memory of ChatModel must be set"
+        self.memory.reset()
+        
+    def stop(self) -> None:
+        with self._stop_lock:
+            self._stop_flag = True
+
+    def _check_stop(self) -> bool:
+        with self._stop_lock:
+            return self._stop_flag
+        
+    async def astream_prompt(self, prompt: str) -> AsyncGenerator[str, None]:
+        self._stop_flag = False
+        with self._temporary_context():
+            handler = self.agent.run(user_msg=prompt, memory=self.memory)
+            async for event in handler.stream_events():
+                if self._check_stop(): break
+                
+                if isinstance(event, AgentStream):
+                    yield event.delta
+                elif isinstance(event, ToolCall):
+                    yield f"\n🔧 Tool called: {event.tool_name}\n"
+        
+        
+    async def aprompt(self, prompt_text: str) -> WorkflowHandler:
+        assert self.agent is not None, "self.agent of ChatModel must be set"
+        with self._temporary_context():
+            if self.thinking_on:
+                return await self.agent.run(f"/think {prompt_text}", memory=self.memory)
+            return await self.agent.run(f"/no_think {prompt_text}", memory=self.memory)
+    
+    def prompt(self, prompt_text: str) -> WorkflowHandler:
+        assert self.agent is not None, "self.agent of ChatModel must be set"
+        
+        nest_asyncio.apply()
+        async def func() -> WorkflowHandler: 
+            with self._temporary_context():
+                if self.thinking_on:
+                    return await self.agent.run(f"/think {prompt_text}", memory=self.memory)
+                return await self.agent.run(f"/no_think {prompt_text}", memory=self.memory)
+        
+        return asyncio.run(func())
+    
+    def add_memory(self, messages: list[ChatMessage]) -> None:
+        assert self.memory is not None, "self.memory of ChatModel must be set"
+        self.memory.put_messages(messages)
+    
+    
+    
+
+        

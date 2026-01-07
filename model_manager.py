@@ -1,9 +1,5 @@
-from typing import Any
-import platform, requests, os, argparse, subprocess
-import shutil, tarfile, zipfile, tempfile
+import platform, os, argparse, subprocess
 
-import tomli
-from tqdm import tqdm
 from pathlib import Path
 
 
