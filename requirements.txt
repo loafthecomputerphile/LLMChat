@@ -28,3 +28,8 @@ pint
 sympy
 ddgs
 html5lib
+python-doctr
+python-docx 
+markdown-it-py
+orjson
+orjsonl

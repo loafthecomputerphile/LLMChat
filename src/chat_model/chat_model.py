@@ -3,10 +3,11 @@ from threading import Lock
 import os, subprocess, asyncio, gc, datetime
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Generator, Any, AsyncGenerator
+from typing import TYPE_CHECKING, Generator, Any, AsyncGenerator, Callable
  
 import nest_asyncio
 from pydantic import BaseModel, Field
+from pathlib import Path
 
 from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.ollama import OllamaEmbedding
@@ -18,7 +19,16 @@ from llama_index.core.prompts import MessageRole
 from llama_index.core.tools.types import BaseTool
 from llama_index.core.tools import QueryEngineTool
 from llama_index.core.agent.workflow import FunctionAgent, AgentStream, ToolCall
-from llama_index.core.memory import Memory, VectorMemory, SimpleComposableMemory
+from llama_index.core.memory import Memory
+from llama_index.core import (
+    SimpleDirectoryReader,
+    load_index_from_storage,
+    VectorStoreIndex,
+    StorageContext,
+)
+from llama_index.vector_stores.faiss import FaissVectorStore
+import faiss
+from ..extractors.extraction_router import make_default_router
 
 from ..paths import (
     PORTABLE_OLLAMA,  OLLAMA_HOME_FOLDER, 
@@ -26,6 +36,7 @@ from ..paths import (
 )
 
 from ..variables import ConfigLoader
+from ..knowledge import KnowledgeManager
 
 if TYPE_CHECKING:
     from subprocess import Popen, STARTUPINFO
@@ -33,8 +44,11 @@ if TYPE_CHECKING:
     from llama_index.core.schema import BaseNode
     from llama_index.core.query_engine import BaseQueryEngine
     from llama_index.core.workflow.handler import WorkflowHandler
+    from llama_index.core.workflow.events import Event
+    from llama_index.core.base.llms.types import ChatResponse
     from llama_index.core.embeddings import BaseEmbedding
     from llama_index.core.llms.function_calling import FunctionCallingLLM
+    from llama_index.core.vector_stores.types import BasePydanticVectorStore
     
     from ..extractors.extraction_router import ExtractionRouter
 
@@ -56,12 +70,14 @@ class ModelParams(BaseModel):
     top_k_memory: int = Field(4)
 
 
-EMBEDDING_DIMENSIONS: int = 384
 
 
 
 config_loader: ConfigLoader = ConfigLoader()
 config_loader.load()
+
+
+
 
 
 class ChatModel:
@@ -71,13 +87,14 @@ class ChatModel:
         "faiss_index", "agent", "system_prompt", "llm_name", 
         "llm_params", "ollama_server", "error_flag", "memory", 
         "model", "embedding", "vector_store", "tools", "_stop_lock",
-        "_stop_flag", "user_info", "tool_vector_store", "tool_text_splitter"
+        "_stop_flag", "user_info", "tool_vector_store", "tool_text_splitter",
+        "added_nodes"
     )
     
     def __init__(self, extractor: ExtractionRouter) -> None:
         self.extraction_router: ExtractionRouter = extractor
         self.thinking_on: bool = False
-        self.tools: list[BaseTool] = []
+        self.tools: dict[str, BaseTool] = {}
         
         self.ollama_server: Popen | None = None
         self.error_flag: Exception | None = None
@@ -90,6 +107,7 @@ class ChatModel:
         self.model: FunctionCallingLLM | None = None
         self.memory: Memory | None = None
         self.vector_store: VectorStoreIndex | None = None
+        self.added_nodes: set[str] = set()
         
         self._stop_lock: Lock = Lock()
         self._stop_flag: bool = False
@@ -109,8 +127,8 @@ class ChatModel:
         os.environ.setdefault('OLLAMA_HOME', str(OLLAMA_HOME_FOLDER))
         os.environ.setdefault('OLLAMA_NO_AUTOSTART', str(1))
         
-    def add_documents(self, paths: list[str]) -> list[str] | None:
-        errors: list[str] = []
+    def add_documents(self, paths: list[str]) -> dict[str, str]:
+        errors: dict[str, str] = {k:"ok" for k in paths}
         results: list[list[BaseNode] | str]
         deletion_indexes: list[int] = []
         path_length: int = len(paths)
@@ -123,7 +141,7 @@ class ChatModel:
                 results = pool.map(self.extraction_router.extract, paths)
 
             for i, _ in filter(lambda x: isinstance(x[1], str), enumerate(results)):
-                errors.append(paths[i])
+                errors[paths[i]] = "failed"
                 deletion_indexes.append(i)
             
             if deletion_indexes:
@@ -133,7 +151,8 @@ class ChatModel:
         elif path_length == 1:
             results = [self.extraction_router.extract(paths[0])]
             if isinstance(results[0], str): 
-                errors = [paths[0]]
+                errors[paths[0]] = "failed"
+                del results[0]
         
         
         if self.vector_store is None: 
@@ -142,7 +161,8 @@ class ChatModel:
                 embed_model=self.embedding, show_progress=True
             )
         
-        for res in results: 
+        for res in results:
+            self._clear_nodes(res)
             self.vector_store.insert_nodes(res)
             
         query_tool: QueryEngineTool = self._create_rag_tool(
@@ -151,17 +171,28 @@ class ChatModel:
         
         self.delete_tools(["document_data_tool"], False)
         self.add_tools([query_tool])
-                
-        if len(errors) > 0:
-            return errors
+        
+        return {Path(k).name:v for k, v in errors.items()}
+        
+    def _clear_nodes(self, nodes: list[BaseNode]) -> None:
+        clear_list: list[int] = []
+        for i, node in enumerate(nodes):
+            if node.hash in self.added_nodes:
+                clear_list.append(i)
+                continue
+            self.added_nodes.add(node.hash)
+            
+        for index in clear_list[::-1]:
+            del nodes[index]
         
     def delete_tools(self, names: list[str], update_tools: bool = True) -> None:
         assert self.agent is not None, "self.agent of ChatModel must be set"
         
-        self.tools = [t for t in self.tools if t.metadata.name not in names]
+        for name in filter(lambda x: x in self.tools, names):
+            del self.tools[name]
         
         if update_tools:
-            self.agent.tools = self.tools
+            self.agent.tools = self.get_tools()
     
     def set_temperature(self, value: float) -> None:
         assert self.agent is not None, "self.agent of ChatModel must be set"
@@ -187,20 +218,24 @@ class ChatModel:
     def load_parameters(self, params: ModelParams) -> None:
         self.llm_params = params
         
+    def get_tools(self) -> list[BaseTool]:
+        return list(self.tools.values())
+
+        
     def add_tools(self, functions: list[BaseTool]) -> None:
         assert self.agent is not None, "self.agent of ChatModel must be set"
         
         if not isinstance(functions, list):
             raise TypeError("parameter 'functions' must be of type List[BaseTool]")
         
-        valids: list[BaseTool] = []
+        valids: dict[str, BaseTool] = {}
         for function in functions:
             if not isinstance(function, BaseTool):
                 raise TypeError("element in functions is not of tyoe BaseTool")
-            valids.append(function)
+            valids[function.metadata.name] = function
         
-        self.tools.extend(valids)
-        self.agent.tools = self.tools
+        self.tools.update(valids)
+        self.agent.tools = self.get_tools()
         
     def _create_rag_tool(self, description: str, top_k: int = 4) -> QueryEngineTool:
         query_engine: BaseQueryEngine = self.vector_store.as_query_engine(
@@ -268,6 +303,22 @@ class ChatModel:
                 gc.collect()
             except Exception as e:
                 continue
+        
+    def add_doc_store_query_engine(self, doc_store_paths: list[str]) -> None:
+        new_tools: list[BaseTool] = []
+        manager: KnowledgeManager = KnowledgeManager()
+        for doc_store_path in doc_store_paths:
+            index, info = manager.load_index(doc_store_path)
+            new_tools.append(
+                QueryEngineTool.from_defaults(
+                    query_engine=index.as_query_engine(similarity_top_k=3),
+                    name=info.query_engine_name,
+                    description=info.query_engine_desc
+                )
+            )
+            
+        self.add_tools(new_tools)
+        
     
     @contextmanager
     def _temporary_context(self) -> Generator[None, Any, Any]:
@@ -314,7 +365,7 @@ class ChatModel:
                     break
 
             
-    def load_model(self, tools: list[BaseTool] | None = None) -> None:
+    def load_model(self, tools: list[BaseTool] | None = None, doc_store_paths: list[str] | None = None) -> None:
         from ..tools import (
             BetterWikipediaToolSpec, WebSearchToolSpec, UnitConvertionToolSpec, 
             AutoChainedSympyMathToolSpec, SimpleMathToolSpec
@@ -341,8 +392,7 @@ class ChatModel:
         
         self._initialize_memory()
         self.agent = FunctionAgent(
-            llm=self.model, request_timeout=360.0, 
-            tools=self.tools, system_prompt=self.system_prompt
+            request_timeout=360.0, tools=self.get_tools(), system_prompt=self.system_prompt
         )
         
         self.tool_vector_store = VectorStoreIndex(
@@ -357,6 +407,9 @@ class ChatModel:
         
         if tools is not None:
             self.add_tools(tools)
+            
+        if doc_store_paths is not None:
+            self.add_doc_store_query_engine(doc_store_paths)
     
     def _initialize_memory(self) -> None:
         self.memory: Memory = Memory.from_defaults(token_limit=self.llm_params.history_tokens)
@@ -364,6 +417,12 @@ class ChatModel:
     def clear_memory(self) -> None:
         assert self.memory is not None, "self.memory of ChatModel must be set"
         self.memory.reset()
+        
+    def clear_vector_store(self) -> None:
+        if self.vector_store is None:
+            return
+        self.vector_store = None
+        self.added_nodes.clear()
         
     def stop(self) -> None:
         with self._stop_lock:
@@ -373,19 +432,70 @@ class ChatModel:
         with self._stop_lock:
             return self._stop_flag
         
-    async def astream_prompt(self, prompt: str) -> AsyncGenerator[str, None]:
+    async def agenerate_title(self, initial_prompt: str) -> str:
+        assert self.model is not None, "self.model of ChatModel must be set before generating a title."
+        
+        system_instruction: str = (
+            "Your only task is to generate a concise title summarizing the user's initial prompt. "
+            "The title MUST be strictly between 3 and 6 words long. "
+            "Output ONLY the raw title text. Do not include quotes, prefixes, punctuation, or conversational text."
+        )
+        
+        try:
+            messages: list[ChatMessage] = [
+                ChatMessage(role=MessageRole.SYSTEM, content=system_instruction),
+                ChatMessage(role=MessageRole.USER, content=initial_prompt)
+            ]
+            
+            # Query the LLM directly to avoid agent overhead and tool usage
+            response: ChatResponse = await self.model.achat(messages)
+            title: str = response.message.content.strip(' "\'\n\r\t')
+            
+            # Safety cleanup: ensure it doesn't exceed word counts if the LLM misbehaves
+            words: list[str] = title.split()
+            if len(words) > 6:
+                return " ".join(words[:6])
+            elif not words:
+                return "New Conversation"
+                
+            return title
+            
+        except Exception as e:
+            self.error_flag = e
+            return "New Conversation"
+
+    def generate_title(self, initial_prompt: str) -> str:
+        nest_asyncio.apply()
+        
+        async def func() -> str:
+            return await self.agenerate_title(initial_prompt)
+            
+        return asyncio.run(func())
+        
+    async def astream_prompt(self, prompt: str, tool_wrap: Callable[[str], str] | None = None) -> AsyncGenerator[str, None]:
         self._stop_flag = False
         with self._temporary_context():
-            handler = self.agent.run(user_msg=prompt, memory=self.memory)
-            async for event in handler.stream_events():
-                if self._check_stop(): break
-                
-                if isinstance(event, AgentStream):
-                    yield event.delta
-                elif isinstance(event, ToolCall):
-                    yield f"\n🔧 Tool called: {event.tool_name}\n"
-        
-        
+            handler: WorkflowHandler = self.agent.run(user_msg=prompt, memory=self.memory)
+            event_stream: AsyncGenerator[Event, None] = handler.stream_events()
+            try:
+                async for event in event_stream:
+                    if self._check_stop():
+                        await handler.cancel_run()
+                        break
+                    
+                    if isinstance(event, AgentStream):
+                        yield event.delta
+                    elif isinstance(event, ToolCall):
+                        if tool_wrap:
+                            yield tool_wrap(event.tool_name)
+                        yield f"\nTool Called: {event.tool_name}\n"
+            finally:
+                await event_stream.aclose()
+                try: 
+                    await handler
+                except:
+                    pass
+    
     async def aprompt(self, prompt_text: str) -> WorkflowHandler:
         assert self.agent is not None, "self.agent of ChatModel must be set"
         with self._temporary_context():

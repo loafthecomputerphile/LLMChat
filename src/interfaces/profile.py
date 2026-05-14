@@ -8,12 +8,14 @@ from pathlib import Path
 from llama_index.core.llms import ChatMessage
 from pydantic import BaseModel, Field, ConfigDict
 
+from src.utils.persistent_model import TarPersistentModel
+
 CHAT_DATA: Path = Path.home() / "Documents" / "LLMChat"
 PROFILE_PATH: Callable[[str], Path] = lambda name: CHAT_DATA / name
 HISTORY_PATH: Callable[[str], Path] = lambda name: PROFILE_PATH(name) / "histories"
 
 
-class ChatHistory(BaseModel):
+class ChatHistory(TarPersistentModel):
     character_instruction: str = Field("")
     messages: list[ChatMessage] = Field(default_factory=list)
     
@@ -36,8 +38,9 @@ class BaseProfile:
             b64encode(name.encode('utf-8')).decode('utf-8')
         )
         
-        with gzip.open(path, "wb") as file: 
-            dill.dump(ChatHistory().model_dump(), file)
+        history: ChatHistory = ChatHistory()
+        history.attach_tar(path)
+        history.close()
         
         self.history_files[name] = path
         

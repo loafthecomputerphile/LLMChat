@@ -85,8 +85,8 @@ archive-types = [".zip", ".tgz", ".tar.gz"]
 
 [Models]
 
-embedding-name = "snowflake-embed-s:Q8"
-embedding-pull = "hf.co/mradermacher/snowflake-arctic-embed-s-GGUF:Q8_0"
+embedding-name = "nomic-embed-v1.5:Q8"
+embedding-pull = "hf.co/nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0"
 
-llm-name = "ministral3-3b:Q5"
-llm-pull = "hf.co/unsloth/Ministral-3-3B-Instruct-2512-GGUF:Q5_K_S"
+llm-name = "ministral3-3b:Q4"
+llm-pull = "ministral-3:3b-instruct-2512-q4_K_M"

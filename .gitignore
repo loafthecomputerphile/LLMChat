@@ -169,6 +169,7 @@ venv.bak/
 
 #assets and binaries
 data/bin/*
+data/knowledge/*
 data/ollama_data/logs/*
 data/ollama_data/models/*
 data/ollama_data/ollama_home/*

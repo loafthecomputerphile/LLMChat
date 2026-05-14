@@ -1,10 +1,16 @@
+from __future__ import annotations
 import os, uuid
+from typing import Any, TYPE_CHECKING
 
 from .extraction_utils import bytes_to_megabytes, get_mimetype, set_pandoc_env
 from ..flags import ExtractionErrors, EXTRACTION_ERROR_FLAG
+from ..paths import OCR_MODELS_FOLDER
 
 from llama_index.core import Document
 
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+    from doctr.io import Document as DoctrDocument
 
 __all__ = [
     "excel_extractor", "plain_extractor", "word_extractor", "pdf_extractor", "presentation_extractor",
@@ -12,9 +18,36 @@ __all__ = [
 ]
 
 set_pandoc_env()
- 
 
-ocr_model = None
+os.environ["DOCTR_CACHE_DIR"] = str(OCR_MODELS_FOLDER)
+
+MODEL_KWARGS: dict[str, Any] = {
+    "reco_arch":"crnn_vgg16_bn",
+    "det_arch":"fast_base",
+    "pretrained":True,
+    "reco_bs":256, 
+    "det_bs":2
+}
+
+
+def pdf_to_text(file_path: str, start_page: int = 0, end_page: int = -1) -> str:
+    from doctr.io import DocumentFile
+    from doctr.models import ocr_predictor
+    
+    ocr_model = ocr_predictor(**MODEL_KWARGS)
+    
+    doc: list[NDArray] = DocumentFile.from_pdf(file_path)
+
+    doc = doc[
+        start_page: len(doc) 
+        if end_page == -1 or end_page is None else 
+        end_page
+    ]
+    
+    result: DoctrDocument = ocr_model(doc)
+    return result.render()
+
+
 FILE_SIZE_LIMIT: int = 25
 
 
@@ -99,16 +132,19 @@ def pdf_extractor(file_path: str) -> list[Document] | str:
     if bytes_to_megabytes(os.path.getsize(file_path)) > FILE_SIZE_LIMIT:
         return ExtractionErrors.FILE_SIZE_LIMIT
     
-    import fitz
+    text: str = pdf_to_text(file_path)
     
-    doc: fitz.Document = fitz.open(file_path)
-    page: fitz.Page = None
+    #import fitz
     
-    text: str = ""
-        
-    for page in map(lambda i: doc.load_page(i), range(len(doc))):
-        text += page.get_text() + "\n"
-        
+    
+    # doc: fitz.Document = fitz.open(file_path)
+    # page: fitz.Page = None
+    # 
+    # text: str = ""
+    #     
+    # for page in map(lambda i: doc.load_page(i), range(len(doc))):
+    #     text += page.get_text() + "\n"
+    
     return [
         Document(
             text=text, id_=str(uuid.uuid4()), metadata={

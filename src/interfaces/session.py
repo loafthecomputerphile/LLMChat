@@ -1,10 +1,10 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, AsyncGenerator
+from typing import TYPE_CHECKING, AsyncGenerator, Callable, Coroutine, Any
 import gzip, gc
 
 from llama_index.core.llms import ChatMessage
 from pydantic import BaseModel, Field, ConfigDict
-import dill
+import orjson
 
 from ..chat_model import ChatModel
 from .profile import BaseProfile, ChatHistory
@@ -44,9 +44,14 @@ class BaseChatSession(BaseModel):
     def get_histories(self) -> list[str]:
         return self.user.history_names
     
-    def send_message(self, message: str) -> AsyncGenerator[str, None]:
+    def generate_title(self, message: str) -> Coroutine[Any, Any, str]:
         assert self.in_session, "session has not been started"
-        return self.model.astream_prompt(message)
+        return self.model.agenerate_title(message)
+        
+    def send_message(self, message: str, tool_wrap: Callable[[str], str] | None = None) -> AsyncGenerator[str, None]:
+        assert self.in_session, "session has not been started"
+        self.history.append("message", message)
+        return self.model.astream_prompt(message, tool_wrap)
     
     def start_session(self, params: ModelParams, tools: list[BaseTool] | None = None) -> None:
         assert not self.in_session, "session has already started"
@@ -89,10 +94,7 @@ class BaseChatSession(BaseModel):
     
     def save_history(self) -> None:
         assert self.in_session, "session has not been started"
-        self.history.messages = self.model.memory.get_all()
-        
-        with gzip.open(self.history_path, "wb") as file:
-            dill.dump(self.history.model_dump(), file)
+        self.history.save()
             
     def load_history(self, name: str) -> None:
         assert self.in_session, "session has not been started"
@@ -102,12 +104,12 @@ class BaseChatSession(BaseModel):
             self.save_history()
         
         self.history_path = self.user.history_files[name]
-        with gzip.open(self.history_path, "rb") as file:
-            self.history = ChatHistory.model_validate(dill.load(file))
+        self.history = ChatHistory.load(self.history_path)
         
         if self.history.character_instruction:
             self.model.set_character_prompt(self.history.character_instruction)
-            
+        
+        self.model.clear_vector_store()
         self.model.clear_memory()  
         self.model.add_memory(self.get_history_messages())
         self.history_loaded = True
@@ -119,6 +121,6 @@ class BaseChatSession(BaseModel):
         assert self.in_session, "session has not been started"
         self.model.stop()
         
-    def add_documents(self, docs_paths: list[str]) -> None:
+    def add_documents(self, docs_paths: list[str]) -> list[str] | None:
         assert self.in_session, "session has not been started"
-        self.model.add_documents(docs_paths)
+        return self.model.add_documents(docs_paths)

@@ -12,8 +12,7 @@ ROOT: Path = Path(__file__).parent
 
 
 def prepend_path(path_to_add: str) -> dict:
-    """Return a copy of os.environ with path_to_add placed at the front of PATH."""
-    env = os.environ.copy()
+    env: dict[str, str] = os.environ.copy()
     env["PATH"] = path_to_add + os.pathsep + env["PATH"]
     return env
 
@@ -67,7 +66,7 @@ def download_and_install(url: str, install_dir: str, backup_old: bool = True) ->
     install_dir: Path = Path(install_dir)
     install_dir.mkdir(parents=True, exist_ok=True)
 
-    old_install : Path | None = None
+    old_install: Path | None = None
     if backup_old and install_dir.exists() and any(install_dir.iterdir()):
         old_install = install_dir.with_suffix(".backup")
         if old_install.exists():
@@ -76,7 +75,7 @@ def download_and_install(url: str, install_dir: str, backup_old: bool = True) ->
         install_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-        tmp_path = Path(tmp_file.name)
+        tmp_path: Path = Path(tmp_file.name)
         print(f"Downloading {url} to temp file {tmp_path}")
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
@@ -96,7 +95,7 @@ def download_and_install(url: str, install_dir: str, backup_old: bool = True) ->
             print("Restoring previous version...")
             shutil.rmtree(install_dir)
             shutil.move(str(old_install), str(install_dir))
-        raise
+        
 
     tmp_path.unlink(missing_ok=True)
 

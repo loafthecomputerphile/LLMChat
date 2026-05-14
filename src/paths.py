@@ -10,6 +10,7 @@ CONFIG: Path = _current / "config.toml"
 DATA_FOLDER: Path = ROOT / "data" 
 
 BINARIES_FOLDER: Path = DATA_FOLDER / "bin"
+KNOWLEDGE_FOLDER: Path = DATA_FOLDER / "knowledge"
 PANDOC_EXE: Path = BINARIES_FOLDER / "pandoc" / "pandoc.exe"
 PORTABLE_OLLAMA: Path = BINARIES_FOLDER / "ollama" / "ollama_portable.bat"
 PORTABLE_OLLAMA_EM: Path = BINARIES_FOLDER / "ollama" / "ollama_portable_em.bat"
@@ -26,6 +27,7 @@ if platform.system().lower() == "linux":
 
 
 MODELS_FOLDER: Path = DATA_FOLDER / "ollama_data" / "models"
+OCR_MODELS_FOLDER: Path = MODELS_FOLDER / "ocr"
 OLLAMA_HOME_FOLDER: Path = DATA_FOLDER / "ollama_data" / "ollama_home"
 SERVER_LOG_FOLDER: Path = DATA_FOLDER / "ollama_data" / "logs"
 
