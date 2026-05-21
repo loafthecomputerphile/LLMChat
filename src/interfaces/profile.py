@@ -3,7 +3,7 @@ from typing import Callable
 from base64 import b64encode
 import gzip
 
-import dill
+import orjson
 from pathlib import Path
 from llama_index.core.llms import ChatMessage
 from pydantic import BaseModel, Field, ConfigDict
@@ -20,15 +20,13 @@ class ChatHistory(TarPersistentModel):
     messages: list[ChatMessage] = Field(default_factory=list)
     
     model_config: ConfigDict = ConfigDict(arbitrary_types_allowed=True)
-    
 
-class BaseProfile:
 
-    def __init__(self, username: str) -> None:
-        self.username: str = username
-        self.info: str = ""
-        self.history_files: dict[str, str] = {}
-        
+class BaseProfile(BaseModel):
+    username: str
+    info: str = Field(default="", init=False)
+    history_files: dict[str, str] = Field(default_factory=dict, init=False)
+
     def get_history_path(self, name: str) -> str | None:
         return self.history_files.get(name, None)
         
@@ -56,10 +54,17 @@ class BaseProfile:
         return list(self.history_files.keys())
     
     def save_profile(self) -> None:
-        with gzip.open(str(PROFILE_PATH(self.username) / "profile"), "wb") as file:
-            dill.dump(self, file)
+        (PROFILE_PATH(self.username) / "profile").write_bytes(
+            orjson.dumps(
+                self.model_dump()
+            )
+        )
     
     @classmethod
     def load_profile(cls, name: str) -> BaseProfile:
-        with gzip.open(str(PROFILE_PATH(name) / "profile"), "rb") as file:
-            return dill.load(file)
+        return cls.model_validate(
+            orjson.loads(
+                str(PROFILE_PATH(name) / "profile")
+            )
+        )
+        

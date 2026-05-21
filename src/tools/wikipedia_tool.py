@@ -87,7 +87,7 @@ class BetterWikipediaToolSpec(BaseToolSpec):
         """
         
         return self._load(query)
-        
+        '''
         try:
             for doc_id, _ in self.vector_index.ref_doc_info.items():
                 self.vector_index.delete_ref_doc(doc_id)
@@ -112,7 +112,7 @@ class BetterWikipediaToolSpec(BaseToolSpec):
             return str(e)
         
         return str(response)
-        
+        '''
     def wiki_search(self, query: str) -> str:
         """
         Search Wikipedia for a topic and answer a question using the page content.

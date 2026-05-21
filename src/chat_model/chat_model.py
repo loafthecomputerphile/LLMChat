@@ -41,7 +41,7 @@ from ..knowledge import KnowledgeManager
 if TYPE_CHECKING:
     from subprocess import Popen, STARTUPINFO
     
-    from llama_index.core.schema import BaseNode
+    from llama_index.core.schema import BaseNode, Document
     from llama_index.core.query_engine import BaseQueryEngine
     from llama_index.core.workflow.handler import WorkflowHandler
     from llama_index.core.workflow.events import Event
@@ -70,14 +70,27 @@ class ModelParams(BaseModel):
     top_k_memory: int = Field(4)
 
 
-
-
+TIME_DIRECTIVE: str = 'Reference all time-sensitive questions (e.g., "how long ago", "next month") using this metadata.'
+SEARCH_DIRECTIVE: str = """[SEARCH DIRECTIVE]
+- You possess an internal knowledge base that terminates at a fixed training cutoff. If a user asks about events, statistics, or news that occurred after your internal training boundary—or if you recognize that you lack verified, pre-trained facts about their query—you MUST proactively use your web search tool.
+- Do not guess, speculate, or state "I don't have access to real-time information" without attempting a web search first.
+"""
 
 config_loader: ConfigLoader = ConfigLoader()
 config_loader.load()
 
 
-
+def doc_dump_to_text(doc_dump: dict[str, str]) -> str:
+    format_data: str = ""
+    
+    for key, value in doc_dump.items():
+        format_data += f"{key.capitalize()}:{value}\n"
+        
+    return (
+        "<document>\n"
+        f"\t{format_data}\n"
+        "<document>"
+    )
 
 
 class ChatModel:
@@ -88,7 +101,7 @@ class ChatModel:
         "llm_params", "ollama_server", "error_flag", "memory", 
         "model", "embedding", "vector_store", "tools", "_stop_lock",
         "_stop_flag", "user_info", "tool_vector_store", "tool_text_splitter",
-        "added_nodes"
+        "added_nodes", "document_data"
     )
     
     def __init__(self, extractor: ExtractionRouter) -> None:
@@ -106,6 +119,7 @@ class ChatModel:
         self.embedding: BaseEmbedding | None = None
         self.model: FunctionCallingLLM | None = None
         self.memory: Memory | None = None
+        self.document_data: list[dict[str, str]] = []
         self.vector_store: VectorStoreIndex | None = None
         self.added_nodes: set[str] = set()
         
@@ -129,7 +143,7 @@ class ChatModel:
         
     def add_documents(self, paths: list[str]) -> dict[str, str]:
         errors: dict[str, str] = {k:"ok" for k in paths}
-        results: list[list[BaseNode] | str]
+        results: list[Document | str]
         deletion_indexes: list[int] = []
         path_length: int = len(paths)
         
@@ -138,7 +152,7 @@ class ChatModel:
         
         if path_length > 1:
             with ThreadPoolExecutor(4) as pool:
-                results = pool.map(self.extraction_router.extract, paths)
+                results = pool.map(lambda x: self.extraction_router.extract(x, True), paths)
 
             for i, _ in filter(lambda x: isinstance(x[1], str), enumerate(results)):
                 errors[paths[i]] = "failed"
@@ -149,29 +163,31 @@ class ChatModel:
                     del results[index]               
             
         elif path_length == 1:
-            results = [self.extraction_router.extract(paths[0])]
+            results = [self.extraction_router.extract(paths[0], True)]
             if isinstance(results[0], str): 
                 errors[paths[0]] = "failed"
                 del results[0]
         
-        
+        '''
         if self.vector_store is None: 
             self.vector_store = VectorStoreIndex(
                 [], vector_store=None, 
                 embed_model=self.embedding, show_progress=True
             )
+        '''
+        for doc in results:
+            self.document_data.append(
+                doc.custom_model_dump()
+            )
         
-        for res in results:
-            self._clear_nodes(res)
-            self.vector_store.insert_nodes(res)
-            
+        '''
         query_tool: QueryEngineTool = self._create_rag_tool(
             config_loader.get("Prompts", "RAG_PROMPT"), self.llm_params.rag_top_k
         )
         
         self.delete_tools(["document_data_tool"], False)
         self.add_tools([query_tool])
-        
+        '''
         return {Path(k).name:v for k, v in errors.items()}
         
     def _clear_nodes(self, nodes: list[BaseNode]) -> None:
@@ -331,7 +347,6 @@ class ChatModel:
         def inject(prompt: str | None) -> None:
             if not prompt:
                 return
-            
             msg: ChatMessage = ChatMessage(
                 role=MessageRole.SYSTEM, content=prompt,
                 additional_kwargs={"ephemeral": True},
@@ -340,14 +355,23 @@ class ChatModel:
             self.memory.put(msg)
             injected.append(msg)
         
-        new_system_prompt: str = "\n\n".join((
-            f"Current date and time: {datetime.datetime.now()}",
-            f"## User Information:\n{self.user_info if self.user_info else "None"}",
-            f"## Additional System Prompt:\n{self.system_prompt}"
+        new_system_prompt: str = "\n".join((
+            self.system_prompt,
+            f"{SEARCH_DIRECTIVE}"
+            f"<current-datetime>\n\tTime: {datetime.datetime.now()}\n{TIME_DIRECTIVE}\n</current-datetime>",
+            f"<user-info>\n\t{self.user_info if self.user_info else "None"}\n</user-info>"
         ))
         
         if self.character_prompt:
-            new_system_prompt += f"\n\n## Use this persona while adhearing to all other rules:\n{self.character_prompt}"
+            new_system_prompt += f"\n<character-prompt>\n\t{self.character_prompt}\n</character-prompt>"
+            
+        if self.document_data:
+            new_system_prompt += ( 
+                "[KNOWLEDGE CONTEXT]\nUse the following extracted document text as your primary baseline for session-specific questions.\n"
+                '<documents_text>' 
+                f"{'\n\t'.join(map(doc_dump_to_text, self.document_data))}" 
+                '\n</documents_text>' 
+            )
             
         inject(new_system_prompt)
 
@@ -407,10 +431,10 @@ class ChatModel:
         
         if tools is not None:
             self.add_tools(tools)
-            
+        
         if doc_store_paths is not None:
             self.add_doc_store_query_engine(doc_store_paths)
-    
+        
     def _initialize_memory(self) -> None:
         self.memory: Memory = Memory.from_defaults(token_limit=self.llm_params.history_tokens)
         

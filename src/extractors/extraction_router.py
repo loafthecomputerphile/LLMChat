@@ -27,7 +27,9 @@ class SplitExtractor:
         self.extractor: Extractor = extractor
         self.splitter: TextSplitter = splitter
     
-    def __call__(self, path: str) -> list[BaseNode]:
+    def __call__(self, path: str, extract_only: bool = False) -> list[BaseNode] | list[Document]:
+        if extract_only:
+            return self.extractor(path)
         return self.splitter.get_nodes_from_documents(self.extractor(path))
 
 
@@ -58,14 +60,14 @@ class ExtractionRouter:
         for mime_type in mime_types:
             self.file_map[mime_type] = extractor_name
                
-    def extract(self, file_path: str) -> list[BaseNode] | str:
+    def extract(self, file_path: str, extract_only: bool = False) -> list[BaseNode] | str:
         try:
             if "." not in file_path:
                 return ExtractionErrors.FILE_TYPE_NOT_RECOGNIZED
             file_type: str = file_path.split(".")[-1]
             if file_type not in self.file_map:
                 return ExtractionErrors.FILE_TYPE_NOT_RECOGNIZED
-            return self.extractors[self.file_map[file_type]](file_path)
+            return self.extractors[self.file_map[file_type]](file_path, extract_only)
         except Exception as e:
             traceback.print_exc()
             return ExtractionErrors.UNKNOWN_ERROR

@@ -74,7 +74,7 @@ class BaseChatSession(BaseModel):
         self.model.kill()
         self.in_session = False
         
-    def new_history(self, name: str) -> str | None:
+    def new_history(self, name: str) -> None:
         assert self.in_session, "session has not been started"
         self.user.add_new_history(name) 
         
@@ -109,7 +109,8 @@ class BaseChatSession(BaseModel):
         if self.history.character_instruction:
             self.model.set_character_prompt(self.history.character_instruction)
         
-        self.model.clear_vector_store()
+        #self.model.clear_vector_store()
+        self.model.document_data.clear()
         self.model.clear_memory()  
         self.model.add_memory(self.get_history_messages())
         self.history_loaded = True
